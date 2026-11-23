@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Geely CarPlay</string>
+
+    <!-- 启动页 -->
+    <string name="splash_tagline">你的手机，畅享旅程。</string>
+    <string name="splash_checking">正在准备界面…</string>
+    <string name="splash_ready">界面已就绪</string>
+
+    <!-- 首页 -->
+    <string name="home_state_connected">CarPlay 已连接</string>
+    <string name="btn_connect_phone">连接手机</string>
+    <string name="btn_enter_carplay">进入 CarPlay</string>
+    <string name="btn_disconnect">断开 CarPlay</string>
+    <string name="btn_exit_to_head_unit">退出应用</string>
+    <string name="exit_confirm_title">退出应用</string>
+    <string name="exit_disconnect_message">退出将断开 CarPlay 连接，是否确认退出？</string>
+    <string name="exit_confirm">确认退出</string>
+    <string name="exit_closing">正在断开连接并退出…</string>
+    <string name="btn_back">返回</string>
+    <string name="btn_hotspot_settings">打开车机热点设置</string>
+    <string name="home_wireless_title">无线 CarPlay</string>
+    <string name="home_wireless_state">尚未连接</string>
+    <string name="home_wireless_hint">车机热点 · 保持车机热点、蓝牙和 iPhone 的 Wi-Fi 开启。</string>
+    <string name="home_settings_title">设置</string>
+    <string name="home_settings_hint">按需调整显示、音频和连接选项。</string>
+    <string name="home_hotspot_state">正在读取热点</string>
+    <string name="status_bluetooth">正在读取蓝牙</string>
+
+    <!-- 连接页 -->
+    <string name="connect_title">连接 CarPlay</string>
+    <string name="connect_step_choose">选择连接方式</string>
+    <string name="connect_step_hotspot">打开车机热点</string>
+    <string name="connect_step_phone">选择 iPhone</string>
+    <string name="connect_step_linking">建立连接</string>
+    <string name="connect_cancel">取消连接</string>
+    <string name="connect_cancel_hint">正在建立连接，点击下方按钮可取消。</string>
+    <string name="connect_next">下一步</string>
+    <string name="connect_reconnect">重新连接</string>
+    <string name="connect_cancelled">已取消连接</string>
+    <string name="connect_not_connected">连接未建立</string>
+    <string name="carplay_waiting_video">正在等待 CarPlay 画面…</string>
+    <string name="connect_wireless_title">无线 CarPlay</string>
+    <string name="connect_wireless_hint">车机蓝牙与热点连接 iPhone，无需数据线。</string>
+    <string name="connect_usb_title">USB 有线连接</string>
+    <string name="connect_usb_hint">使用支持数据传输的数据线连接到车机 USB 接口。</string>
+    <string name="connect_recommended">推荐</string>
+    <string name="connect_hotspot_ssid_label">车机热点名称</string>
+    <string name="connect_hotspot_pwd_label">车机热点密码</string>
+    <string name="connect_hotspot_ssid">正在读取…</string>
+    <string name="connect_hotspot_pwd">正在读取…</string>
+    <string name="connect_hotspot_on">正在读取车机热点配置…</string>
+    <string name="connect_found_devices">已配对的设备</string>
+    <string name="connect_linking_hint">保持 iPhone 解锁，并在提示时允许使用 CarPlay。</string>
+    <string name="connect_success">连接成功</string>
+
+    <string name="connect_wireless_meta">蓝牙 + 车机热点</string>
+    <string name="connect_usb_meta">数据线直连 · 即插即用</string>
+    <string name="connect_iphone_action">连接</string>
+    <string name="connect_usb_mode">USB 有线</string>
+    <string name="connect_step_state_running">进行中</string>
+    <string name="connect_step_state_done">已完成</string>
+    <string name="connect_step_state_skipped">已跳过</string>
+    <string name="connect_step_state_pending">待开始</string>
+    <string name="connect_hint_choose">选择一种连接方式后继续。</string>
+    <string name="connect_hint_hotspot">保持车机热点和蓝牙开启，然后继续。</string>
+    <string name="connect_hint_phone">点击要连接的 iPhone 开始配对。</string>
+    <string name="connect_hint_link">保持 iPhone 解锁，并在提示时允许使用 CarPlay。</string>
+
+    <string name="home_last_device">上次连接</string>
+    <string name="home_last_device_state">尚未选择</string>
+    <string name="settings_theme">主题</string>
+    <string name="settings_theme_desc">深色适合夜间, 浅色适合白天, 切换后重建界面并同步 CarPlay。</string>
+    <string name="theme_dark">深色</string>
+    <string name="theme_light">浅色</string>
+    <string name="carplay_ready_hint">CarPlay 已就绪，可进入投屏画面。</string>
+
+    <!-- 设置页 -->
+    <string name="settings_title">设置</string>
+    <string name="settings_subtitle">按你的习惯设置。</string>
+    <string name="settings_note">连接、显示和音频参数在重新连接后生效, 主题立即生效。</string>
+    <string name="settings_cat_connection">连接设置</string>
+    <string name="settings_cat_display">显示与性能</string>
+    <string name="settings_cat_audio">音频</string>
+    <string name="settings_cat_location">位置与权限</string>
+    <string name="settings_cat_diagnostics">诊断</string>
+    <string name="settings_cat_about">关于</string>
+
+    <string name="settings_auto_connect">自动连接</string>
+    <string name="settings_auto_connect_desc">打开应用时连接上次使用的 iPhone。</string>
+    <string name="settings_boot_start">车机启动后打开</string>
+    <string name="settings_boot_start_desc">是否可用取决于车机的启动设置。</string>
+    <string name="settings_pick_iphone">选择 iPhone</string>
+    <string name="settings_pick_iphone_desc">进入连接引导, 选择车机已配对的 iPhone。</string>
+    <string name="row_arrow">›</string>
+
+    <string name="settings_open_connection">打开连接设置</string>
+    <string name="settings_open_connection_desc">选择连接方式，按步骤操作并保存车机热点信息。</string>
+
+    <string name="settings_ui_scale">CarPlay 控件大小</string>
+    <string name="settings_ui_scale_desc">只调整 CarPlay 内的图标和文字大小，不改分辨率与清晰度。</string>
+    <string name="settings_resolution">分辨率</string>
+    <string name="settings_resolution_desc">一般保持原生；仅在车机出现黑屏或裁剪时才调整。</string>
+    <string name="settings_music_buffer">音乐缓冲</string>
+    <string name="settings_music_buffer_desc">缓冲越大越稳定，延迟越高。</string>
+    <string name="settings_frame_rate">帧率</string>
+    <string name="settings_frame_rate_desc">限制上限可减轻车机负载。</string>
+    <string name="settings_hevc">高效视频编码</string>
+    <string name="settings_hevc_desc">使用 HEVC。关闭后可兼容更多车机。</string>
+    <string name="settings_right_hand_drive">右侧驾驶位（右舵）</string>
+    <string name="settings_right_hand_drive_desc">将 CarPlay 控件移至更靠近驾驶员的一侧。</string>
+    <string name="settings_fullscreen">全屏显示</string>
+    <string name="settings_fullscreen_desc">打开 CarPlay 时隐藏车机系统栏。</string>
+
+    <string name="settings_audio_focus">音频焦点</string>
+    <string name="settings_audio_focus_desc">CarPlay 媒体向系统申请音频焦点，导航播报不会压低音乐。</string>
+    <string name="settings_advanced_audio">高级音频声道映射</string>
+    <string name="settings_advanced_audio_desc">按音频用途和内容类型选择输出。</string>
+    <string name="settings_media_stream">媒体音频流</string>
+    <string name="settings_media_stream_desc">0 表示自动路由。</string>
+    <string name="settings_nav_stream">导航音频流</string>
+    <string name="settings_nav_stream_desc">0 表示自动路由。</string>
+
+    <string name="settings_report_location">向 iPhone 报告位置</string>
+    <string name="settings_report_location_desc">iPhone 请求时，将车机定位作为 CarPlay GPS 数据发送。</string>
+    <string name="settings_permissions">应用权限</string>
+    <string name="settings_permissions_desc">附近的设备用于连接 iPhone，麦克风用于 Siri 和通话。</string>
+    <string name="settings_bluetooth">蓝牙设置</string>
+    <string name="settings_bluetooth_desc">打开车机蓝牙设置页。</string>
+
+    <string name="settings_save_report">保存诊断报告</string>
+    <string name="settings_save_report_desc">报告不会自动发送，不包含协议数据和凭据。</string>
+
+    <string name="settings_version">版本</string>
+    <string name="settings_version_value">1.0.0 · DiPlay 处理层</string>
+    <string name="settings_device">车机</string>
+    <string name="settings_device_value">GKUI 1.2 · Android 4.3 · 1920×720</string>
+    <string name="settings_licenses">开源许可</string>
+    <string name="settings_licenses_desc">查看第三方组件与许可说明。</string>
+    <string name="settings_geely_bluetooth">吉利原厂蓝牙</string>
+    <string name="settings_geely_bluetooth_desc">使用 H52 原厂蓝牙读取配对设备并建立 iAP2 连接</string>
+    <string name="settings_geely_audio">吉利 H52 音频路由</string>
+    <string name="settings_geely_audio_desc">音乐和导航使用车机专用音频通道</string>
+    <string name="settings_authentication">MFi 认证</string>
+    <string name="settings_authentication_desc">选择本地资产、USB 设备、I2C 或远程认证</string>
+    <string name="settings_call_mode">通话方式</string>
+    <string name="settings_call_mode_desc">车机麦克风模式需要 Root, 通话期间会暂停原厂语音服务</string>
+    <string name="hotspot_manual_title">填写热点信息</string>
+    <string name="hotspot_edit">修改热点信息</string>
+    <string name="hotspot_manual_help">先在手机系统设置中开启热点, 填写相同的名称和密码。此处只保存连接信息, 不修改系统热点。</string>
+    <string name="hotspot_name_hint">与系统热点名称完全一致</string>
+    <string name="hotspot_password_hint">8–63 个字符, 无密码热点请留空</string>
+    <string name="hotspot_save">保存</string>
+    <string name="hotspot_saved_hint">热点信息已保存, 请确认系统热点已开启后继续连接。</string>
+    <string name="hotspot_manual_hint">请先开启系统热点, 再点击填写热点信息。</string>
+    <string name="hotspot_not_configured">尚未配置</string>
+    <string name="hotspot_open_network">无密码热点</string>
+</resources>

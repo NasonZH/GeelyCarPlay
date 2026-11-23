@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <declare-styleable name="IconView">
+        <attr name="icon" format="enum">
+            <enum name="phone" value="0" />
+            <enum name="usb" value="1" />
+            <enum name="gear" value="2" />
+            <enum name="wifi" value="3" />
+            <enum name="bluetooth" value="4" />
+            <enum name="cast" value="5" />
+            <enum name="display" value="6" />
+            <enum name="volume" value="7" />
+            <enum name="location" value="8" />
+            <enum name="file" value="9" />
+            <enum name="info" value="10" />
+            <enum name="theme" value="11" />
+            <enum name="check" value="12" />
+            <enum name="arrowRight" value="13" />
+            <enum name="lock" value="14" />
+            <enum name="sliders" value="15" />
+            <enum name="arrowLeft" value="16" />
+            <enum name="refresh" value="17" />
+            <enum name="play" value="18" />
+            <enum name="power" value="19" />
+            <enum name="link" value="20" />
+            <enum name="exit" value="21" />
+        </attr>
+        <attr name="iconTint" format="color" />
+    </declare-styleable>
+</resources>

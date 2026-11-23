@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 冷启动窗口背景：MultiDex 安装期间代替空白主题色显示品牌画面 -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@drawable/bg_page" />
+    <item android:drawable="@drawable/splash_mark_centered" />
+</layer-list>

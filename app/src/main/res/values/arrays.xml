@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string-array name="settings_ui_scale_values">
+        <item>小</item>
+        <item>标准</item>
+        <item>大</item>
+    </string-array>
+
+    <string-array name="settings_resolution_values">
+        <item>原生</item>
+        <item>1920×720</item>
+        <item>1344×504 · 70%</item>
+    </string-array>
+
+    <string-array name="settings_music_buffer_values">
+        <item>150 毫秒</item>
+        <item>300 毫秒 · 默认</item>
+        <item>500 毫秒</item>
+    </string-array>
+
+    <string-array name="settings_frame_rate_values">
+        <item>30 帧/秒 · 减轻负载</item>
+        <item>60 帧/秒</item>
+    </string-array>
+
+    <string-array name="settings_audio_stream_values">
+        <item>自动路由</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+        <item>5</item>
+        <item>6</item>
+        <item>7</item>
+        <item>8</item>
+        <item>9</item>
+        <item>10</item>
+        <item>11</item>
+        <item>12</item>
+        <item>13</item>
+        <item>14</item>
+        <item>15</item>
+        <item>16</item>
+        <item>17</item>
+        <item>18</item>
+        <item>19</item>
+        <item>20</item>
+    </string-array>
+    <string-array name="settings_call_mode_values">
+        <item>CarPlay 默认</item>
+        <item>CarPlay 通话 + 车机麦克风 · 需 Root</item>
+    </string-array>
+</resources>

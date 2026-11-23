@@ -1,0 +1,16 @@
+*.iml
+.gradle/
+build/
+local.properties
+.idea/
+.DS_Store
+captures/
+.kotlin/
+.reasonix/
+.adb-tmp/
+.build-tmp/
+*.zip
+# Apple MFi 认证私钥与证书不进入仓库
+app/src/main/assets/offline-mfi/
+# AI 交接文档只保存在本地
+docs/ai-handoff.md

@@ -1,0 +1,15 @@
+# 默认按文本处理并在仓库内使用 LF
+* text=auto eol=lf
+
+# 该项目约定此文件保持 CRLF
+shared/src/main/java/com/shilapi/xcertplay/media/AndroidMediaSink.kt text eol=crlf
+
+# 二进制资源不做换行转换
+*.png binary
+*.webp binary
+*.jar binary
+*.p7b binary
+*.pk8 binary
+*.pcm binary
+*.so binary
+*.apk binary

@@ -1,0 +1,10 @@
+本应用移植了 DiPlay / xcertplay 的 CarPlay 处理代码。
+源项目: https://github.com/xikai6282/DiPlay-Geely-Android43
+原项目 LICENSE 为 GPL-3.0, 部分文件带有 AGPL-3.0-only 标记, 均保留原声明。
+libopus 1.5.2: BSD-3-Clause
+Concentus 1.0.2: BSD 风格许可, 保留源项目提供的 JAR
+JmDNS 3.6.3: Apache-2.0
+BouncyCastle 1.79: MIT
+SLF4J 1.7.36: MIT
+AndroidX Multidex 2.0.1: Apache-2.0
+完整声明和源代码位于项目 LICENSE、shared 和 vendor/jmdns 目录。

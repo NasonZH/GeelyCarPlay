@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/bg_card"
+    android:orientation="vertical"
+    android:padding="@dimen/gap_lg">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <FrameLayout
+            android:id="@+id/connect_link_icon_wrap"
+            android:layout_width="@dimen/panel_header_badge_size"
+            android:layout_height="@dimen/panel_header_badge_size"
+            android:background="@drawable/bg_icon_badge">
+
+            <com.geely.carplay.ui.widget.IconView
+                android:id="@+id/connect_link_icon"
+                android:layout_width="@dimen/panel_header_icon_size"
+                android:layout_height="@dimen/panel_header_icon_size"
+                android:layout_gravity="center"
+                app:icon="cast"
+                app:iconTint="@color/brand" />
+        </FrameLayout>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="@dimen/gap_md"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/connect_link_title"
+                style="@style/Text.Section"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/connect_step_linking" />
+
+            <TextView
+                android:maxLines="2"
+                android:ellipsize="end"
+                android:id="@+id/connect_link_hint"
+                style="@style/Text.Caption"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/gap_xs"
+                android:text="@string/connect_linking_hint" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <ScrollView
+        android:id="@+id/connect_log_scroll"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_marginTop="@dimen/gap_md"
+        android:layout_weight="1"
+        android:background="@drawable/bg_log"
+        android:padding="@dimen/gap_md"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:id="@+id/connect_log_lines"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+    </ScrollView>
+</LinearLayout>
