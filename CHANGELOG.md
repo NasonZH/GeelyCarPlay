@@ -32,6 +32,7 @@
 
 ### 说明
 
+- 验证环境：吉利 2019 款星越 300T，GKUI 1.2 / Android 4.3（API 18），系统版本 `06.03.08600.H53.00060`，1920×720。
 - 仓库不包含 Apple MFi 认证资产，构建前需自备
   `app/src/main/assets/offline-mfi/identity.pk8` 与 `certificate.p7b`。
 - 发布包与源码遵循 GPLv3。
