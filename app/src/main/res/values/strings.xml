@@ -155,6 +155,9 @@
     <string name="settings_bluetooth">蓝牙设置</string>
     <string name="settings_bluetooth_desc">打开车机蓝牙设置页。</string>
 
+    <string name="settings_verbose_log">详细日志</string>
+    <string name="settings_verbose_log_desc">输出触摸与 RTSP 收发明细，用于排查问题，日常使用建议关闭。</string>
+
     <string name="settings_save_report">保存诊断报告</string>
     <string name="settings_save_report_desc">报告不会自动发送，不包含协议数据和凭据。</string>
 

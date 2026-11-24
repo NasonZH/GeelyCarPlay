@@ -51,6 +51,9 @@ object CarPlaySessionManager {
     private val notifyListeners = Runnable { listeners.toList().forEach { it() } }
     private val listeners = mutableSetOf<() -> Unit>()
     private val logLines = ArrayDeque<String>()
+    /** 复用同一个格式化器 每条日志都新建 SimpleDateFormat 在车机上开销明显 */
+    private val logTimeLock = Any()
+    private val logTimeFormat = SimpleDateFormat("HH:mm:ss", Locale.CHINA)
     private val sessions = java.util.concurrent.CopyOnWriteArraySet<AirPlaySession>()
     @Volatile private var generation = 0
     private var controller: CarPlayController? = null
@@ -625,7 +628,7 @@ object CarPlaySessionManager {
     private fun appendLog(message: String) {
         val safeMessage = com.shilapi.xcertplay.DiagnosticRedactor.redact(message) ?: return
         android.util.Log.i("GeelyCarPlay", safeMessage)
-        val time = SimpleDateFormat("HH:mm:ss", Locale.CHINA).format(Date())
+        val time = synchronized(logTimeLock) { logTimeFormat.format(Date()) }
         logLines.addLast("$time  $safeMessage")
         while (logLines.size > 150) logLines.removeFirst()
         changed()

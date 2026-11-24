@@ -121,6 +121,7 @@ class SettingsActivity : Activity() {
             R.string.settings_cat_diagnostics,
             IconView.Icon.FILE,
             listOf(
+                SettingsItem.Toggle(R.string.settings_verbose_log, R.string.settings_verbose_log_desc),
                 SettingsItem.Link(R.string.settings_save_report, R.string.settings_save_report_desc, LinkAction.REPORT),
             ),
         ),
@@ -179,7 +180,11 @@ class SettingsActivity : Activity() {
         when (item) {
             is SettingsItem.Toggle -> row.bindToggle(item.titleResId, item.descResId, loadToggle(item.titleResId)) {
                 saveToggle(item.titleResId, it)
-                showReconnectHint()
+                if (item.titleResId == R.string.settings_verbose_log) {
+                    Toast.makeText(this, "已保存, 详细日志立即生效", Toast.LENGTH_SHORT).show()
+                } else {
+                    showReconnectHint()
+                }
             }.also {
                 if (item.titleResId == R.string.settings_hevc && !com.shilapi.xcertplay.media.H52VideoCapabilities.supportsHevc()) {
                     row.isEnabled = false
@@ -282,6 +287,7 @@ class SettingsActivity : Activity() {
         R.string.settings_report_location -> AirPlayPersistence.loadLocationReportingEnabled(this)
         R.string.settings_geely_bluetooth -> AirPlayPersistence.loadGeelyBluetoothConnectionEnabled(this)
         R.string.settings_geely_audio -> AirPlayPersistence.loadGeelyAudioRouting(this)
+        R.string.settings_verbose_log -> AirPlayPersistence.loadDebugLogsEnabled(this)
         else -> error("未绑定的设置项")
     }
 
@@ -300,6 +306,10 @@ class SettingsActivity : Activity() {
             R.string.settings_report_location -> AirPlayPersistence.saveLocationReportingEnabled(this, value)
             R.string.settings_geely_bluetooth -> AirPlayPersistence.saveGeelyBluetoothConnectionEnabled(this, value)
             R.string.settings_geely_audio -> AirPlayPersistence.saveGeelyAudioRouting(this, value)
+            R.string.settings_verbose_log -> {
+                AirPlayPersistence.saveDebugLogsEnabled(this, value)
+                com.shilapi.xcertplay.diagnostics.DiagnosticLog.verbose = value
+            }
             else -> error("未绑定的设置项")
         }
     }

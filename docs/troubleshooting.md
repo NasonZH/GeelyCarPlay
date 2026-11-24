@@ -172,6 +172,8 @@ peak=0不能单独证明静音，需核对该解码路径是否维护此统计�
 
 底层xcertplay-usb可能含热点凭据、设备名称/地址、证书、签名及十六进制协议；需要时先过滤，不打印完整payload/raw-body/head，不导出认证资产。UI报告经过DiagnosticRedactor，分享前仍复查。
 
+触摸报文（`airplay touch report sent`）、RTSP 收发摘要（`airplay rx/tx`）和 iAP2 逐帧 trace（`IAP2 RX`/`IAP2 TX`，含参数清单与 raw-body 十六进制）默认不输出，先在设置页“诊断”分组打开“详细日志”再采集。开关立即生效，无需重连；统计、阶段、`会话关闭诊断`、`event 退出诊断` 和 `IAP2 CLOSE` 不受影响。需要 wire 级十六进制时另把 `AirPlayTrace.enabled` 改为 true，它和该开关相互独立。
+
 本机临时证据：`/tmp/geely-carplay-performance.log`、`/tmp/geely-carplay-navigation-audio.log`、`/tmp/geely-carplay-music-noise.log`。它们不在仓库，可能被清理；下一位AI不能假定一定存在。
 
 ## 首次连接卡顿与重连对比诊断
@@ -209,3 +211,39 @@ TouchLatencyProbe 为全局对象，待测触摸未在新会话开始时清零�
 主题修改包已通过安装摘要核对。17:58:18 Surface 分离发生在进入设置页之前，返回投屏后同一 session=1 重新挂载并出帧，未见该时段清空任务栈的跳转；但未捕获明确主题切换重建事件，主题切换路径仍需单独验收。SurfaceView 已实机出帧且未见自动回退，厂商兼容及错误回退仍待验证。
 
 验证范围：相关 APK 构建和测试源码编译成功，未由 AI 执行单元测试或启动实机测试；APK 只推送，由用户手动安装和连接。未实施触摸后请求关键帧、自动降画质、自动重连或热点参数修改。
+
+## 连接中途 event EOF 与 iAP2 link ended 记录
+
+2026-11-24 18:40–18:42 小米 MI 6 记录到三次断开。`连接失败: iAP2 link ended` 是结果而不是原因，链条为：iPhone 关闭 AirPlay event 连接（对端 EOF）→ 车机关闭整场会话 → 视频 socket 本地关闭（`SocketException`，`localClosed=true`）→ type-130 隧道结束 → `Iap2LinkChannel` 在没有具体原因时抛出默认文案（`shared/src/main/java/com/shilapi/xcertplay/transport/Iap2LinkChannel.kt:250`）。判断断开原因必须先看同一时刻的 `event 退出诊断` 与 `会话关闭诊断`，不能只读这条兜底消息。
+
+三次断开：
+
+| 时间 | 对象 | 现象 |
+| --- | --- | --- |
+| 18:40:19.76 | session=1 | `event 退出诊断: 原因=对端 EOF`，随后会话关闭 |
+| 18:41:07.36 | attempt=2 建立阶段 | `IAP2 RX [wireless-rfcomm] FAILED: bt socket closed, read return: -1`，蓝牙引导通道被关闭 |
+| 18:42:01.35 | session=2 | `event 退出诊断: 原因=对端 EOF` |
+
+断开前的证据：session=1 视频 `readMaxMs=17025`（17 秒没读到字节），`video stats rx=0.6fps shown=0.0fps kbps=18`，期间每秒 `Video recovery: requested keyframe sent=true` 但无帧；session=2 由 `rx=12.4fps kbps=589` 降到 `链路诊断 接收=1kbps/8包`、`视频静默=11685ms`。两次统计都是 `seqForwardGaps=0 lateOrDuplicate=0`，车机侧没有丢包或乱序证据。同一时段 `ntpTx` 与 `ntpResponsesRx` 持续同步增长（session=2 由 6/5 到 26/21），`ntpRequestSendErrors=0`，UDP 往返一直正常。
+
+因此不能判定为 iAP2 协议错误或整条 Wi-Fi 掉线；现象是 iPhone 到车机的视频 TCP 没有数据，而小包仍通。现有日志无法区分“iPhone 侧停止编码发流”与“接收方向 TCP 被 Wi-Fi 压住”。该时段用户是否在 iPhone 上有操作（锁屏、切换应用、断开 CarPlay、来电）尚未确认，确认前不得把三次断开归因为自动断链。
+
+后续区分办法（本轮未实施，未修改代码）：打开设置页“详细日志”复现并对照 EOF 前的 `airplay rx/tx`；在设置里降帧率或分辨率做同条件对比；只读检查 wlan1 的 TCP 重传统计与热点频段信道；必要时取 iPhone 侧 sysdiagnose。以上均待验证，不构成已确认根因。
+
+## 性能优化待办（未实测）
+
+以下按预期收益排序，全部来自静态阅读源码，没有做过 A/B 实测。实施任何一项之前先用现有诊断确认收益，不能用估算代替验证；改完只算“源码编译通过”，效果仍需实机对比。
+
+已完成（2026-11-24）：触摸报文、RTSP 收发摘要和 iAP2 逐帧 trace 已归入设置页“详细日志”开关并默认静默；日志时间格式复用同一个 `SimpleDateFormat`；`DiagnosticRedactor` 合并两条丢弃正则，并在整行既无冒号也无点号时跳过地址替换。下面几项都没改动。
+
+1. 触摸逐事件发送。`CarPlayActivity.kt:117-121` 对每个 MotionEvent 调用 `CarPlaySessionManager.sendTouch`，`AirPlaySession.sendTouch:225` 每次做坐标缩放、HID 报文、bplist 编码、ChaCha 加密和 socket 写，滑动时 60–120 次/秒全部走一遍。日志已不是负担：触摸报文只在会话首条输出且需要打开详细日志。改法是合并同一帧周期内的 `ACTION_MOVE` 只发最后一个，或限频到 60Hz。风险在跟手性，需要用 `TouchLatencyProbe` 对比改动前后耗时；该探针是全局对象且不在新会话清零，跨会话样本不能直接比较。
+
+2. 视频每帧新建 AEAD 实例。`AirPlayCrypto.chachaOpen:90-103` 每帧 `new ChaCha20Poly1305()`、`init`、分配输出数组，长度不符时再 `copyOf`。改法是复用实例或按密钥缓存。注意 BouncyCastle 每次 `init` 仍会重设密钥与状态，收益主要来自对象分配和多余拷贝，不是省掉加解密计算本身；纯 Java 的 ChaCha20-Poly1305 计算仍是主要开销，收益不足时只能考虑 JNI 实现，工程量大，未经评估不做。验证用 `DiPlay-VideoStats` 的 rx/shown、recoveries 和 CPU 单核快照。
+
+3. `VideoDecodeQueue` 每帧全队列扫描。`VideoDecodeQueue.kt:35-46` 每帧 `filterIsInstance<VideoJob.Frame>()` 分配一次列表再做 `sumOf`，队列上限 60 帧，30–60 次/秒。改法是维护 frameCount 与 frameBytes 两个计数器，在入队和 `discardFrames` 时同步更新，对外行为不变。`shared/src/test/.../VideoSurfaceDetachQueueTest.kt` 覆盖 Surface 分离路径，改动后应确认它仍然符合预期。
+
+4. 音频每包数组分配。`AudioStream.kt:105` 每包 `wire.copyOf`，`:124-128` 再三次 `copyOfRange` 和 `ByteArray(12)` nonce，另外每包新建 AEAD 实例，50–100 包/秒。改法是复用接收缓冲、nonce 与实例；包会被异步队列消费，复用缓冲前必须先确认所有权。验证用 `DiPlay-AudioStats` 的 underruns、queue、authFailures 和实际听感。
+
+5. 杂项。视频解码线程没有设置优先级：`AndroidMediaSink.kt:738` 创建 `carplay-video` 线程，而音频在 `:1262` 设了 `THREAD_PRIORITY_AUDIO`；视频线程可以试 `THREAD_PRIORITY_DISPLAY`，但要实测是否反过来抢占音频。`ScreenStream.readFully:138-148` 每帧分配 128 字节头部，可复用，收益很小。
+
+不在验证收益前做：JNI 重写 ChaCha20、修改协议参数、为性能新增设置项。

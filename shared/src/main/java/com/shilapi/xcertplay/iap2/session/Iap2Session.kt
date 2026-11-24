@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay.iap2.session
 
+import com.shilapi.xcertplay.diagnostics.DiagnosticLog
 import com.shilapi.xcertplay.iap2.body.Iap2BodyBuilder
 import com.shilapi.xcertplay.iap2.body.Iap2BodyReader
 import com.shilapi.xcertplay.iap2.catalog.Iap2Endpoint
@@ -92,6 +93,8 @@ class Iap2Session private constructor(
     }
 
     private fun emitFrameTrace(direction: Iap2TraceDirection, frame: Iap2Frame) {
+        // 逐帧明细含参数清单和十六进制 只在设置页打开详细日志时输出
+        if (!DiagnosticLog.verbose) return
         try {
             emitTrace(Iap2FrameFormatter.format(direction, traceContext, frame))
         } catch (failure: Exception) {

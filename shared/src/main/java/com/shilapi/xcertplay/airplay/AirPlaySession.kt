@@ -2,6 +2,7 @@ package com.shilapi.xcertplay.airplay
 
 import android.os.SystemClock
 import android.util.Log
+import com.shilapi.xcertplay.diagnostics.DiagnosticLog
 import com.shilapi.xcertplay.mfi.MfiAuthenticator
 import com.shilapi.xcertplay.transport.BlockingDuplexByteStream
 import java.io.BufferedInputStream
@@ -237,12 +238,14 @@ class AirPlaySession(
             touchFailed.incrementAndGet()
         }
         if (sent && firstTouchSendLogged.compareAndSet(false, true)) {
-            val first = scaled.firstOrNull()
-            Log.i(
-                TAG,
-                "airplay touch report sent contacts=${scaled.size} first=" +
-                    "(${first?.x},${first?.y},down=${first?.down}) report=${report.toHexString()}",
-            )
+            if (DiagnosticLog.verbose) {
+                val first = scaled.firstOrNull()
+                Log.i(
+                    TAG,
+                    "airplay touch report sent contacts=${scaled.size} first=" +
+                        "(${first?.x},${first?.y},down=${first?.down}) report=${report.toHexString()}",
+                )
+            }
         } else if (!sent && touchSendFailureLogged.compareAndSet(false, true)) {
             Log.w(TAG, "airplay touch dropped: event channel is not ready")
         }
@@ -364,13 +367,14 @@ class AirPlaySession(
                 for (request in parsed.messages) {
                     val cseq = request.headers["cseq"] ?: "-"
                     val path = request.path.lowercase()
-                    val showInDebugOverlay =
+                    // 明细摘要只在设置页打开详细日志时输出 feedback 和 command 始终静默
+                    val showSummary = DiagnosticLog.verbose &&
                         !path.endsWith("/feedback") &&
-                            !(request.method == "POST" && path.endsWith("/command"))
+                        !(request.method == "POST" && path.endsWith("/command"))
                     debugLog(
                         "airplay rx ${request.method} ${request.path} cseq=$cseq body=${request.body.size}",
-                        showInDebugOverlay,
-                        showInDebugOverlay,
+                        showSummary,
+                        showSummary,
                     )
                     trace {
                         "airplay control rx headers=${request.headers} " +
@@ -388,8 +392,8 @@ class AirPlaySession(
                     }
                     debugLog(
                         "airplay tx status=${response.status ?: 200} cseq=$cseq body=${response.body.size}",
-                        showInDebugOverlay,
-                        showInDebugOverlay,
+                        showSummary,
+                        showSummary,
                     )
                     val wire = RtspMessage.buildResponse(request, response)
                     trace { "airplay control tx wireHex=${wire.toHex()}" }
