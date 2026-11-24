@@ -12,6 +12,7 @@ import com.geely.carplay.ui.widget.ConnectDiagramView
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.Executors
 
 /**
  * 首页和真实会话状态保持同步
@@ -37,6 +38,10 @@ class HomeActivity : Activity() {
     }
 
     private var deviceStateGeneration = 0
+    /** 首页状态刷新共用一条后台线程 避免每次刷新新建 Thread */
+    private val background = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "home-background").apply { isDaemon = true }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         ThemeStore.load(this)
@@ -132,7 +137,7 @@ class HomeActivity : Activity() {
             showHint(getString(R.string.quick_connect_no_history))
             return
         }
-        Thread({
+        background.execute {
             val target = history.firstOrNull { isBluetoothConnected(it.address) }
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
@@ -149,7 +154,7 @@ class HomeActivity : Activity() {
                 startActivity(ConnectActivity.wirelessIntent(this)
                     .putExtra(ConnectActivity.EXTRA_QUICK_CONNECT, true))
             }
-        }, "carplay-quick-connect").start()
+        }
     }
 
     /**
@@ -160,7 +165,7 @@ class HomeActivity : Activity() {
     private fun ensureWirelessReady(onReady: () -> Unit) {
         val app = applicationContext
         val geely = AirPlayPersistence.loadGeelyBluetoothConnectionEnabled(app)
-        Thread({
+        background.execute {
             val hotspot = com.shilapi.xcertplay.network.CarHotspotTools.readState(app)
             val hotspotBlocked = hotspot == com.shilapi.xcertplay.network.CarHotspotState.DISABLED ||
                 hotspot == com.shilapi.xcertplay.network.CarHotspotState.DISABLING ||
@@ -177,7 +182,7 @@ class HomeActivity : Activity() {
                     else -> onReady()
                 }
             }
-        }, "carplay-wireless-ready").start()
+        }
     }
 
     /** 提示缺失的开关 同时刷新顶部热点与蓝牙状态标记 */
@@ -244,7 +249,7 @@ class HomeActivity : Activity() {
         val geely = AirPlayPersistence.loadGeelyBluetoothConnectionEnabled(app)
         val phoneAddress = DiPlayPreferences.phoneAddress(app)
         val phoneName = DiPlayPreferences.phoneName(app)
-        Thread({
+        background.execute {
             val hotspot = com.shilapi.xcertplay.network.CarHotspotTools.readState(app)
             val bluetooth = if (geely) null else runCatching {
                 (app.getSystemService(BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)?.adapter?.isEnabled
@@ -280,7 +285,7 @@ class HomeActivity : Activity() {
                 findViewById<TextView>(R.id.home_hotspot_state).setTextColor(resources.getColor(if (hotspotReady) R.color.text_primary else R.color.warn))
                 findViewById<TextView>(R.id.home_bluetooth_state).setTextColor(resources.getColor(if (bluetoothReady) R.color.text_primary else R.color.warn))
             }
-        }, "carplay-device-state").start()
+        }
     }
 
     /** 会话在线时标注当前连接 只有蓝牙在线时仍显示上次连接 */
@@ -310,6 +315,11 @@ class HomeActivity : Activity() {
         val pattern = getString(R.string.home_clock_pattern)
         val now = SimpleDateFormat(pattern, Locale.CHINA).format(Date())
         findViewById<TextView>(R.id.home_clock).text = now
+    }
+
+    override fun onDestroy() {
+        background.shutdownNow()
+        super.onDestroy()
     }
 
     companion object {

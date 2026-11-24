@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.AtomicLong
 
 internal sealed interface VideoJob {
     data class Config(val codec: VideoCodec, val codecData: ByteArray) : VideoJob
-    data class Frame(val nalus: ByteArray, val receivedNs: Long = System.nanoTime()) : VideoJob
+    data class Frame(val frame: VideoFrame, val receivedNs: Long = System.nanoTime()) : VideoJob
     data class SurfaceChanged(val surface: Surface?) : VideoJob
     data class DetachSurface(val surface: Surface, val completed: CountDownLatch) : VideoJob
     data object Resync : VideoJob
@@ -21,8 +21,8 @@ internal class VideoReferenceChain {
     var needsKeyFrame = true
         private set
     fun reset() { needsKeyFrame = true }
-    fun accepts(bytes: ByteArray, codec: VideoCodec): Boolean =
-        !needsKeyFrame || MediaCodecSupport.isRandomAccess(bytes, codec)
+    fun accepts(bytes: ByteArray, length: Int, codec: VideoCodec): Boolean =
+        !needsKeyFrame || MediaCodecSupport.isRandomAccess(bytes, length, codec)
     fun onQueued() { needsKeyFrame = false }
 }
 
@@ -39,14 +39,18 @@ internal class VideoDecodeQueue(
 
     @Synchronized fun offer(job: VideoJob) {
         if (job is VideoJob.Frame) {
-            if (frameCount.get() >= maxFrames || frameBytes.get() + job.nalus.size > maxBytes) {
+            val length = job.frame.length
+            if (frameCount.get() >= maxFrames || frameBytes.get() + length > maxBytes) {
                 discardFrames()
                 jobs.offer(VideoJob.Resync)
             }
             // A single oversized frame is also a lost reference chain.
-            if (job.nalus.size > maxBytes) return
+            if (length > maxBytes) {
+                job.frame.release()
+                return
+            }
             frameCount.incrementAndGet()
-            frameBytes.addAndGet(job.nalus.size.toLong())
+            frameBytes.addAndGet(length.toLong())
         }
         jobs.offer(job)
     }
@@ -55,8 +59,12 @@ internal class VideoDecodeQueue(
         // Collection.removeIf is a Java default method added in API 24; use the iterator on 4.3.
         val iterator = jobs.iterator()
         while (iterator.hasNext()) {
-            when (iterator.next()) {
-                is VideoJob.Frame, is VideoJob.Resync -> iterator.remove()
+            when (val job = iterator.next()) {
+                is VideoJob.Frame -> {
+                    job.frame.release()
+                    iterator.remove()
+                }
+                is VideoJob.Resync -> iterator.remove()
                 else -> Unit
             }
         }
@@ -72,7 +80,7 @@ internal class VideoDecodeQueue(
         val job = jobs.poll(timeoutMillis, TimeUnit.MILLISECONDS)
         if (job is VideoJob.Frame) {
             if (frameCount.get() > 0) frameCount.decrementAndGet()
-            if (frameBytes.addAndGet(-job.nalus.size.toLong()) < 0) frameBytes.set(0)
+            if (frameBytes.addAndGet(-job.frame.length.toLong()) < 0) frameBytes.set(0)
         }
         return job
     }

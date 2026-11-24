@@ -67,7 +67,13 @@ class AudioStream(
         val control = bindAnyPort()
         dataSocket = data
         controlSocket = control
-        dataThread = Thread({ runData(data, listener) }, "airplay-audio-rx").apply {
+        dataThread = Thread({
+            // 音频接收线程按音频优先级调度 减少被视频解码和 GC 抢占导致的取包延迟
+            runCatching {
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
+            }
+            runData(data, listener)
+        }, "airplay-audio-rx").apply {
             isDaemon = true
             start()
         }

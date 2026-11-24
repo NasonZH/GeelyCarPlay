@@ -1,6 +1,8 @@
 package com.shilapi.xcertplay.airplay
 
 import android.util.Log
+import com.shilapi.xcertplay.media.VideoFrame
+import com.shilapi.xcertplay.media.VideoFramePool
 import java.io.Closeable
 import java.io.InputStream
 import java.net.InetAddress
@@ -23,13 +25,16 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
     interface Listener {
         fun onCodec(codec: VideoCodec) {}
         fun onConfig(codecData: ByteArray) {}
-        fun onFrame(naluBytes: ByteArray) {}
+        fun onFrame(frame: VideoFrame) {}
         fun onClosed(cause: Throwable?) {}
     }
 
     private val closed = AtomicBoolean(false)
     private val frameCounter = AtomicLong(0)
     private val firstFrameLogged = AtomicBoolean(false)
+    private val nonceBuffer = ByteArray(AirPlayCrypto.NONCE_SIZE)
+    /** 复用密文负载缓冲 解密输出仍按帧分配 */
+    private var bodyBuffer = ByteArray(INITIAL_BODY_BYTES)
     private var server: ServerSocket? = null
     private var socket: Socket? = null
     private var thread: Thread? = null
@@ -72,7 +77,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         val stats = StreamReceiveStats("video", onDiagnostic)
         try {
             val input = sock.getInputStream()
-            // 复用 128 字节头部缓冲 每帧只分配负载本身
+            // 复用头部与负载缓冲 解密输出仍按帧分配 由解码队列持有
             val headerBuffer = ByteArray(HEADER_LEN)
             while (!closed.get()) {
                 stats.reading()
@@ -88,14 +93,17 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
                     break
                 }
                 stage = "读取负载"
-                val body = readFully(input, bodySize)
+                if (bodySize > bodyBuffer.size) {
+                    bodyBuffer = ByteArray(maxOf(bodySize, bodyBuffer.size * 2))
+                }
+                val body = readFully(input, bodyBuffer, bodySize)
                 if (body == null) {
                     exitReason = "负载读取结束 length=$bodySize"
                     break
                 }
                 stats.received(HEADER_LEN + bodySize)
                 stage = "处理消息"
-                onMessage(header, body)
+                onMessage(header, body, bodySize)
                 stats.processed()
             }
         } catch (error: Exception) {
@@ -110,43 +118,56 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         }
     }
 
-    private fun onMessage(header: ByteArray, body: ByteArray) {
+    private fun onMessage(header: ByteArray, body: ByteArray, bodySize: Int) {
         when (header[OPCODE_OFFSET].toInt() and 0xff) {
             OP_VIDEO_FRAME -> {
-                val payload = if (body.size >= ScreenCodec.TAG_SIZE) {
-                    ScreenCodec.decryptFrame(key, frameCounter.get(), header, body)
-                        .also { frameCounter.incrementAndGet() }
+                val frame = if (bodySize >= ScreenCodec.TAG_SIZE) {
+                    val plainLength = bodySize - ScreenCodec.TAG_SIZE
+                    val buffer = VideoFramePool.acquire(plainLength)
+                    val decoded = ScreenCodec.decryptFrameInto(
+                        key,
+                        frameCounter.get(),
+                        header,
+                        body,
+                        bodySize,
+                        nonceBuffer,
+                        buffer,
+                    ).also { frameCounter.incrementAndGet() }
+                    val annexBLength = ScreenCodec.lengthPrefixedToAnnexB(buffer, decoded)
+                    VideoFrame(buffer, annexBLength) { VideoFramePool.release(buffer) }
                 } else {
-                    body
+                    val buffer = VideoFramePool.acquire(bodySize)
+                    body.copyInto(buffer, 0, 0, bodySize)
+                    VideoFrame(buffer, bodySize) { VideoFramePool.release(buffer) }
                 }
                 if (firstFrameLogged.compareAndSet(false, true)) {
                     Log.i(
                         TAG,
-                        "video first decrypted frame sealed=${body.size} plain=${payload.size} " +
-                        "head=${payload.hexPrefix(16)}",
+                        "video first decrypted frame sealed=$bodySize plain=${frame.length} " +
+                        "head=${frame.bytes.hexPrefix(16)}",
                     )
                 }
-                listener.onFrame(ScreenCodec.lengthPrefixedToAnnexB(payload))
+                listener.onFrame(frame)
             }
             OP_VIDEO_CONFIG -> {
-                val (codec, codecData) = ScreenCodec.detectConfig(body)
-                Log.i(TAG, "video codec config codec=$codec body=${body.size} data=${codecData.size}")
+                val configBody = body.copyOf(bodySize)
+                val (codec, codecData) = ScreenCodec.detectConfig(configBody)
+                Log.i(TAG, "video codec config codec=$codec body=$bodySize data=${codecData.size}")
                 listener.onCodec(codec)
                 listener.onConfig(codecData)
             }
         }
     }
 
-    private fun readFully(input: InputStream, length: Int): ByteArray? {
+    private fun readFully(input: InputStream, into: ByteArray, length: Int): ByteArray? {
         if (length < 0) return null
-        val output = ByteArray(length)
         var offset = 0
         while (offset < length) {
-            val read = input.read(output, offset, length - offset)
+            val read = input.read(into, offset, length - offset)
             if (read < 0) return null
             offset += read
         }
-        return output
+        return into
     }
 
     /** 读满已有缓冲 用于复用固定长度的头部 */
@@ -167,6 +188,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         const val OP_VIDEO_FRAME = 0
         const val OP_VIDEO_CONFIG = 1
         const val MAX_BODY = 8 * 1024 * 1024
+        const val INITIAL_BODY_BYTES = 128 * 1024
     }
 }
 
@@ -176,8 +198,54 @@ private fun ByteArray.hexPrefix(length: Int): String =
 /** Extracts the avcC/hvcC codec-data record from a VideoConfig payload. */
 object ScreenCodec {
     fun decryptFrame(key: ByteArray, counter: Long, header: ByteArray, body: ByteArray): ByteArray =
-        if (body.size < TAG_SIZE) body
-        else AirPlayCrypto.chachaOpen(key, AirPlayCrypto.nonce64(counter), body, header)
+        decryptFrame(key, counter, header, body, body.size, ByteArray(AirPlayCrypto.NONCE_SIZE))
+
+    /** 复用 nonce 缓冲的版本 由调用方保证单线程访问 */
+    fun decryptFrame(
+        key: ByteArray,
+        counter: Long,
+        header: ByteArray,
+        body: ByteArray,
+        nonce: ByteArray,
+    ): ByteArray = decryptFrame(key, counter, header, body, body.size, nonce)
+
+    /** 明文从复用缓冲的前 bodySize 字节解密 */
+    fun decryptFrame(
+        key: ByteArray,
+        counter: Long,
+        header: ByteArray,
+        body: ByteArray,
+        bodySize: Int,
+        nonce: ByteArray,
+    ): ByteArray =
+        if (bodySize < TAG_SIZE) body.copyOf(bodySize)
+        else AirPlayCrypto.chachaOpen(
+            key,
+            AirPlayCrypto.nonce64Into(counter, nonce),
+            body,
+            0,
+            bodySize,
+            header,
+        )
+
+    /** 明文直接写入复用缓冲 返回明文长度 */
+    fun decryptFrameInto(
+        key: ByteArray,
+        counter: Long,
+        header: ByteArray,
+        body: ByteArray,
+        bodySize: Int,
+        nonce: ByteArray,
+        output: ByteArray,
+    ): Int = AirPlayCrypto.chachaOpenInto(
+        key,
+        AirPlayCrypto.nonce64Into(counter, nonce),
+        body,
+        0,
+        bodySize,
+        header,
+        output,
+    )
 
     /**
      * Replaces each four-byte NAL length with an Annex B start code in place.
@@ -186,27 +254,33 @@ object ScreenCodec {
      * input keeps its original bytes for the normal decoder error path.
      */
     fun lengthPrefixedToAnnexB(payload: ByteArray): ByteArray {
-        if (payload.size < 4 || payload.startsWithStartCode()) return payload
+        lengthPrefixedToAnnexB(payload, payload.size)
+        return payload
+    }
+
+    /** 原地转换前 length 个字节 返回可解码的长度 */
+    fun lengthPrefixedToAnnexB(payload: ByteArray, length: Int): Int {
+        if (length < 4 || payload.startsWithStartCode(length)) return length
 
         var offset = 0
-        while (offset + 4 <= payload.size) {
-            val length = readU32Be(payload, offset)
+        while (offset + 4 <= length) {
+            val nalLength = readU32Be(payload, offset)
             offset += 4
-            if (length <= 0 || offset + length > payload.size) return payload
-            offset += length
+            if (nalLength <= 0 || offset + nalLength > length) return length
+            offset += nalLength
         }
-        if (offset != payload.size) return payload
+        if (offset != length) return length
 
         offset = 0
-        while (offset + 4 <= payload.size) {
-            val length = readU32Be(payload, offset)
+        while (offset + 4 <= length) {
+            val nalLength = readU32Be(payload, offset)
             payload[offset] = 0
             payload[offset + 1] = 0
             payload[offset + 2] = 0
             payload[offset + 3] = 1
-            offset += 4 + length
+            offset += 4 + nalLength
         }
-        return payload
+        return length
     }
 
     fun detectConfig(payload: ByteArray): Pair<VideoCodec, ByteArray> {
@@ -234,8 +308,10 @@ object ScreenCodec {
     const val TAG_SIZE = 16
 }
 
-private fun ByteArray.startsWithStartCode(): Boolean =
-    size >= 4 &&
+private fun ByteArray.startsWithStartCode(): Boolean = startsWithStartCode(size)
+
+private fun ByteArray.startsWithStartCode(length: Int): Boolean =
+    length >= 4 &&
         this[0] == 0.toByte() &&
         this[1] == 0.toByte() &&
         this[2] == 0.toByte() &&

@@ -35,6 +35,7 @@ class ConnectActivity : Activity() {
     private var connected = false
     private var autoEntered = false
     private var renderedLogMessages: List<String> = emptyList()
+    private var renderedStateSignature: Int? = null
     private var phoneLookupGeneration = 0
     private var hotspotLookupGeneration = 0
     private var hotspotReadFailure: CarHotspotFailure? = null
@@ -378,10 +379,23 @@ class ConnectActivity : Activity() {
     }
 
     private fun render() {
+        // 状态没有变化时只刷新日志 避免连接阶段每 100ms 重建整套控件
+        val signature = stateSignature()
+        if (signature == renderedStateSignature) return
+        renderedStateSignature = signature
         renderPanel()
         renderSteps()
         renderAction()
         renderModeState()
+    }
+
+    private fun stateSignature(): Int {
+        var result = stepIndex
+        result = result * 31 + mode.ordinal
+        result = result * 31 + if (connected) 1 else 0
+        result = result * 31 + if (CarPlaySessionManager.isRunning) 1 else 0
+        result = result * 31 + CarPlaySessionManager.statusText.hashCode()
+        return result
     }
 
     private fun renderPanel() {

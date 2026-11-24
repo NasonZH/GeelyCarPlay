@@ -43,6 +43,8 @@ object CarPlaySessionManager {
     private const val TIMING_SIGNAL_LOG_DELAY_MILLIS = 15_000L
     /** 链路诊断采样间隔 与音视频统计的 5 秒窗口对齐 */
     private const val LINK_DIAG_INTERVAL_MILLIS = 5_000L
+    /** 重传计数读取间隔 降低 /proc 访问频率 */
+    private const val RETRANS_SAMPLE_INTERVAL_MILLIS = 15_000L
     /** 连接后多久内自动暂停手机续播的音乐 超过这个时间视为用户主动播放 */
     private const val AUTO_PAUSE_WINDOW_MILLIS = 15_000L
     private val main = Handler(Looper.getMainLooper())
@@ -71,6 +73,9 @@ object CarPlaySessionManager {
     @Volatile private var timingSignalMissingLogged = false
     /** /proc/net/snmp 可读性 读取被系统拒绝后不再每 5 秒重试 */
     private var tcpRetransReadable: Boolean? = null
+    /** /proc 读取间隔 链路诊断仍每 5 秒采样 但重传计数每 15 秒读一次 */
+    private var lastRetransReadAt = 0L
+    private var lastRetransValue: Long? = null
     /** 链路诊断上一窗口的累计值 用于计算接收速率和重传增量 */
     private var lastDiagAt = 0L
     private var lastDiagRxBytes = 0L
@@ -498,6 +503,9 @@ object CarPlaySessionManager {
     /** 系统 TCP 重传计数 增量持续升高说明链路在丢包重传 读不到时返回 null */
     private fun readTcpRetransSegs(): Long? {
         if (tcpRetransReadable == false) return null
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastRetransReadAt < RETRANS_SAMPLE_INTERVAL_MILLIS) return lastRetransValue
+        lastRetransReadAt = now
         val lines = runCatching { File("/proc/net/snmp").readLines() }.getOrNull()
         if (lines == null) {
             tcpRetransReadable = false
@@ -511,7 +519,8 @@ object CarPlaySessionManager {
             ?.removePrefix("Tcp:")?.trim()?.split(Regex("\\s+")) ?: return null
         val index = names.indexOf("RetransSegs")
         if (index < 0) return null
-        return values.getOrNull(index)?.toLongOrNull()
+        lastRetransValue = values.getOrNull(index)?.toLongOrNull()
+        return lastRetransValue
     }
 
     /** iOS 在连接车机时会自动续播上次的音频 这里在检测到开始播放后暂停一次 */
@@ -628,10 +637,19 @@ object CarPlaySessionManager {
         return controller?.sendTouch(CarPlayTouchMapper.contacts(event, width, height)) ?: false
     }
 
-    fun saveReport(context: Context): File {
-        val file = File(context.getExternalFilesDir(null) ?: context.filesDir, "carplay-diagnostic.txt")
-        file.writeText(logLines.joinToString("\n"))
-        return file
+    /** 日志快照在调用线程生成 文件写入与结果回调分别在工作线程和主线程完成 */
+    fun saveReport(context: Context, onSaved: (File?, Throwable?) -> Unit) {
+        val snapshot = logLines.joinToString("\n")
+        val appContext = context.applicationContext
+        worker.execute {
+            val result = runCatching {
+                val directory = appContext.getExternalFilesDir(null) ?: appContext.filesDir
+                val file = File(directory, "carplay-diagnostic.txt")
+                file.writeText(snapshot)
+                file
+            }
+            main.post { onSaved(result.getOrNull(), result.exceptionOrNull()) }
+        }
     }
 
     private fun deliver(token: Int, action: () -> Unit) {

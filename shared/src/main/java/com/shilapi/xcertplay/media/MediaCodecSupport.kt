@@ -58,57 +58,61 @@ object MediaCodecSupport {
 
     /** Converts CarPlay's length-prefixed NAL units into an Annex B byte stream. */
     fun toAnnexB(lengthPrefixed: ByteArray): ByteArray {
-        if (lengthPrefixed.size >= 4 &&
-            lengthPrefixed[0] == 0.toByte() &&
-            lengthPrefixed[1] == 0.toByte() &&
-            lengthPrefixed[2] == 0.toByte() &&
-            lengthPrefixed[3] == 1.toByte()
-        ) {
-            return lengthPrefixed
-        }
+        if (lengthPrefixed.startsWithStartCode(lengthPrefixed.size)) return lengthPrefixed
+        val copy = lengthPrefixed.copyOf()
+        return if (toAnnexB(copy, copy.size) > 0) copy else ByteArray(0)
+    }
+
+    /** 原地把前 length 个字节的分组长度改成起始码 返回可解码长度 */
+    fun toAnnexB(lengthPrefixed: ByteArray, length: Int): Int {
+        if (length < 4) return 0
+        if (lengthPrefixed.startsWithStartCode(length)) return length
 
         var inputOffset = 0
         var outputSize = 0
-        while (inputOffset + 4 <= lengthPrefixed.size) {
-            val length = readU32Be(lengthPrefixed, inputOffset)
+        while (inputOffset + 4 <= length) {
+            val nalLength = readU32Be(lengthPrefixed, inputOffset)
             inputOffset += 4
-            if (length <= 0 || length > lengthPrefixed.size - inputOffset) return ByteArray(0)
-            if (length > Int.MAX_VALUE - outputSize - START_CODE.size) return ByteArray(0)
-            outputSize += START_CODE.size + length
-            inputOffset += length
+            if (nalLength <= 0 || nalLength > length - inputOffset) return 0
+            outputSize += START_CODE.size + nalLength
+            inputOffset += nalLength
         }
-        if (outputSize == 0 || inputOffset != lengthPrefixed.size) return ByteArray(0)
+        if (outputSize == 0 || inputOffset != length) return 0
 
-        val output = ByteArray(outputSize)
         var offset = 0
-        var outputOffset = 0
-        while (offset + 4 <= lengthPrefixed.size) {
-            val length = readU32Be(lengthPrefixed, offset)
-            offset += 4
-            if (length <= 0 || offset + length > lengthPrefixed.size) break
-            START_CODE.copyInto(output, outputOffset)
-            outputOffset += START_CODE.size
-            lengthPrefixed.copyInto(output, outputOffset, offset, offset + length)
-            outputOffset += length
-            offset += length
+        while (offset + 4 <= length) {
+            val nalLength = readU32Be(lengthPrefixed, offset)
+            START_CODE.copyInto(lengthPrefixed, offset)
+            offset += START_CODE.size + nalLength
         }
-        return output
+        return outputSize
     }
 
+    private fun ByteArray.startsWithStartCode(length: Int): Boolean =
+        length >= 4 &&
+            this[0] == 0.toByte() &&
+            this[1] == 0.toByte() &&
+            this[2] == 0.toByte() &&
+            this[3] == 1.toByte()
+
     /** IDR (AVC) or IRAP (HEVC) starts an independently decodable reference chain. */
-    fun isRandomAccess(annexB: ByteArray, codec: VideoCodec): Boolean {
+    fun isRandomAccess(annexB: ByteArray, codec: VideoCodec): Boolean =
+        isRandomAccess(annexB, annexB.size, codec)
+
+    /** 只扫描前 length 个字节 用于复用缓冲 */
+    fun isRandomAccess(annexB: ByteArray, length: Int, codec: VideoCodec): Boolean {
         var cursor = 0
-        while (cursor + 3 < annexB.size) {
+        while (cursor + 3 < length) {
             val prefix = when {
                 annexB[cursor] != 0.toByte() || annexB[cursor + 1] != 0.toByte() -> 0
                 annexB[cursor + 2] == 1.toByte() -> 3
                 annexB[cursor + 2] == 0.toByte() && annexB[cursor + 3] == 1.toByte() -> 4
                 else -> 0
             }
-            if (prefix > 0 && cursor + prefix < annexB.size) {
+            if (prefix > 0 && cursor + prefix < length) {
                 val header = annexB[cursor + prefix].toInt() and 255
                 if (codec == VideoCodec.H264 && header and 31 == 5) return true
-                if (codec == VideoCodec.H265 && cursor + prefix + 1 < annexB.size &&
+                if (codec == VideoCodec.H265 && cursor + prefix + 1 < length &&
                     (header shr 1) and 63 in 16..21) return true
                 cursor += prefix
             } else cursor++

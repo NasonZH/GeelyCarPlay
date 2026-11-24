@@ -17,7 +17,7 @@ import java.security.SecureRandom
 /** BouncyCastle-backed primitives for the CarPlay pairing and control channel. */
 object AirPlayCrypto {
     private const val MAC_BITS = 128
-    private const val NONCE_SIZE = 12
+    const val NONCE_SIZE = 12
     private const val LABEL_SIZE = 8
     private val random = SecureRandom()
 
@@ -121,9 +121,34 @@ object AirPlayCrypto {
         return if (outputLength == output.size) output else output.copyOf(outputLength)
     }
 
+    /** 解密结果直接写入复用缓冲 返回明文长度 */
+    fun chachaOpenInto(
+        key: ByteArray,
+        nonce: ByteArray,
+        ciphertextAndTag: ByteArray,
+        ciphertextOffset: Int,
+        ciphertextLength: Int,
+        aad: ByteArray,
+        output: ByteArray,
+    ): Int {
+        val cipher = ChaCha20Poly1305()
+        cipher.init(false, AEADParameters(KeyParameter(key), MAC_BITS, nonce, aad))
+        val processed = cipher.processBytes(
+            ciphertextAndTag, ciphertextOffset, ciphertextLength, output, 0,
+        )
+        val finalized = cipher.doFinal(output, processed)
+        return processed + finalized
+    }
+
     /** 12-byte nonce: four zero bytes followed by an eight-byte little-endian counter. */
-    fun nonce64(counter: Long): ByteArray {
-        val nonce = ByteArray(NONCE_SIZE)
+    fun nonce64(counter: Long): ByteArray = ByteArray(NONCE_SIZE).also { nonce64Into(counter, it) }
+    /** 复用调用方缓冲写入 nonce 避免每帧或每包分配 */
+    fun nonce64Into(counter: Long, nonce: ByteArray): ByteArray {
+        require(nonce.size == NONCE_SIZE) { "nonce must be $NONCE_SIZE bytes" }
+        nonce[0] = 0
+        nonce[1] = 0
+        nonce[2] = 0
+        nonce[3] = 0
         var value = counter
         for (index in 4 until NONCE_SIZE) {
             nonce[index] = value.toByte()

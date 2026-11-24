@@ -46,8 +46,10 @@ class IconView(context: Context, attrs: AttributeSet? = null) : View(context, at
     }
 
     fun setIcon(newIcon: Icon, tintColor: Int) {
+        val changed = icon != newIcon
         icon = newIcon
         applyTint(tintColor)
+        if (changed) invalidate()
     }
 
     fun setIconTint(tintColor: Int) {
@@ -55,6 +57,7 @@ class IconView(context: Context, attrs: AttributeSet? = null) : View(context, at
     }
 
     private fun applyTint(tintColor: Int) {
+        if (strokePaint.color == tintColor && fillPaint.color == tintColor) return
         strokePaint.color = tintColor
         fillPaint.color = tintColor
         invalidate()

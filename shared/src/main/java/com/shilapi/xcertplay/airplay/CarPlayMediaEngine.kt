@@ -1,6 +1,7 @@
 package com.shilapi.xcertplay.airplay
 
 import android.util.Log
+import com.shilapi.xcertplay.media.VideoFrame
 import com.shilapi.xcertplay.transport.BlockingDuplexByteStream
 import java.io.Closeable
 import java.io.File
@@ -17,7 +18,7 @@ data class AudioStreamId(val type: Int, val audioType: String)
 interface MediaSink {
     fun onVideoCodec(type: Int, codec: VideoCodec) {}
     fun onVideoConfig(type: Int, codecData: ByteArray) {}
-    fun onVideoFrame(type: Int, naluBytes: ByteArray) {}
+    fun onVideoFrame(type: Int, frame: VideoFrame) {}
     fun setVideoRecoveryHandler(type: Int, handler: () -> Unit) {}
     fun setVideoDiagnosticHandler(type: Int, handler: (String) -> Unit) {}
     fun onScreenStreamActive(type: Int, active: Boolean) {}
@@ -103,7 +104,7 @@ class CarPlayMediaEngine(
             object : ScreenStream.Listener {
                 override fun onCodec(codec: VideoCodec) = sink.onVideoCodec(type, codec)
                 override fun onConfig(codecData: ByteArray) = sink.onVideoConfig(type, codecData)
-                override fun onFrame(naluBytes: ByteArray) = sink.onVideoFrame(type, naluBytes)
+                override fun onFrame(frame: VideoFrame) = sink.onVideoFrame(type, frame)
                 override fun onClosed(cause: Throwable?) {
                     Log.w(
                         TAG,

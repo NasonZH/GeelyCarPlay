@@ -358,12 +358,11 @@ class SettingsActivity : Activity() {
             LinkAction.PERMISSIONS -> openSystem(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
             LinkAction.BLUETOOTH -> openSystem(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
             LinkAction.AUTHENTICATION -> chooseAuthentication()
-            LinkAction.REPORT -> {
-                try {
-                    val file = CarPlaySessionManager.saveReport(this)
+            LinkAction.REPORT -> CarPlaySessionManager.saveReport(this) { file, error ->
+                if (file != null) {
                     showMessage("诊断报告", "报告已保存到 ${file.absolutePath}")
-                } catch (error: Exception) {
-                    showMessage("保存失败", error.message ?: "无法写入报告")
+                } else {
+                    showMessage("保存失败", error?.message ?: "无法写入报告")
                 }
             }
             LinkAction.VERSION -> showMessage("版本", "Geely CarPlay 1.0.0\n已接入 DiPlay 处理层")

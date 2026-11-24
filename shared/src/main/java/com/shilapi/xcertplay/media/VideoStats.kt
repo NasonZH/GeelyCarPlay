@@ -1,62 +1,87 @@
 package com.shilapi.xcertplay.media
 
 import android.util.Log
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 /** Five-second video counters that separate network/iPhone gaps from decoder throughput. */
 internal class VideoStats(
     private val label: String = "",
     private val nanoTime: () -> Long = System::nanoTime,
 ) {
-    private var windowStartNs = nanoTime()
-    private var lastArrivalNs = 0L
-    private var received = 0
-    private var rendered = 0
-    private var recoveries = 0
-    private var bytes = 0L
-    private var maxArrivalGapNs = 0L
-    private var touchSamples = 0
-    private var touchLatencySumNs = 0L
-    private var maxTouchLatencyNs = 0L
+    private val windowStartNs = AtomicLong(nanoTime())
+    private val lastArrivalNs = AtomicLong(0L)
+    private val received = AtomicInteger()
+    private val rendered = AtomicInteger()
+    private val recoveries = AtomicInteger()
+    private val bytes = AtomicLong()
+    private val maxArrivalGapNs = AtomicLong()
+    private val touchSamples = AtomicInteger()
+    private val touchLatencySumNs = AtomicLong()
+    private val maxTouchLatencyNs = AtomicLong()
 
-    @Synchronized fun onReceived(size: Int) {
+    fun onReceived(size: Int) {
         val now = nanoTime()
-        val gap = now - lastArrivalNs
-        if (lastArrivalNs != 0L && gap < IDLE_GAP_NS) maxArrivalGapNs = maxOf(maxArrivalGapNs, gap)
-        lastArrivalNs = now
+        val previous = lastArrivalNs.getAndSet(now)
+        if (previous != 0L) {
+            val gap = now - previous
+            if (gap in 1 until IDLE_GAP_NS) updateMax(maxArrivalGapNs, gap)
+        }
         // Touches only change the main screen; a second stream must not consume their samples.
         val touchLatency = if (label.isEmpty()) TouchLatencyProbe.onFrame(now) else -1L
         if (touchLatency >= 0) {
-            touchSamples++
-            touchLatencySumNs += touchLatency
-            maxTouchLatencyNs = maxOf(maxTouchLatencyNs, touchLatency)
+            touchSamples.incrementAndGet()
+            touchLatencySumNs.addAndGet(touchLatency)
+            updateMax(maxTouchLatencyNs, touchLatency)
         }
-        received++
-        bytes += size
+        received.incrementAndGet()
+        bytes.addAndGet(size.toLong())
     }
 
-    @Synchronized fun onRendered() { rendered++ }
+    fun onRendered() {
+        rendered.incrementAndGet()
+    }
 
-    @Synchronized fun onRecovery() { recoveries++ }
+    fun onRecovery() {
+        recoveries.incrementAndGet()
+    }
 
     @Synchronized fun logIfDue(): String? {
         val now = nanoTime()
-        val elapsedNs = now - windowStartNs
+        val elapsedNs = now - windowStartNs.get()
         if (elapsedNs < WINDOW_NS) return null
         val seconds = elapsedNs / 1e9
-        if (received == 0 && touchSamples == 0) { windowStartNs = now; return null }
-        val touchAvgMs = if (touchSamples == 0) -1 else touchLatencySumNs / touchSamples / 1_000_000
+        val receivedCount = received.getAndSet(0)
+        val renderedCount = rendered.getAndSet(0)
+        val recoveryCount = recoveries.getAndSet(0)
+        val byteCount = bytes.getAndSet(0)
+        val maxGap = maxArrivalGapNs.getAndSet(0)
+        val touchCount = touchSamples.getAndSet(0)
+        val touchSum = touchLatencySumNs.getAndSet(0)
+        val touchMax = maxTouchLatencyNs.getAndSet(0)
+        if (receivedCount == 0 && touchCount == 0) {
+            windowStartNs.set(now)
+            return null
+        }
+        val touchAvgMs = if (touchCount == 0) -1 else touchSum / touchCount / 1_000_000
         val line = ("video stats$label rx=%.1ffps shown=%.1ffps maxGap=%dms kbps=%d recoveries=%d " +
             "touch2frame avg=%dms max=%dms n=%d touchSendMax=%dms").format(
-            received / seconds, rendered / seconds, maxArrivalGapNs / 1_000_000,
-            (bytes * 8 / 1000 / seconds).toLong(), recoveries,
-            touchAvgMs, maxTouchLatencyNs / 1_000_000, touchSamples, TouchLatencyProbe.maxSendNs / 1_000_000,
+            receivedCount / seconds, renderedCount / seconds, maxGap / 1_000_000,
+            (byteCount * 8 / 1000 / seconds).toLong(), recoveryCount,
+            touchAvgMs, touchMax / 1_000_000, touchCount, TouchLatencyProbe.maxSendNs / 1_000_000,
         )
         TouchLatencyProbe.maxSendNs = 0
         Log.i(TAG, line)
-        windowStartNs = now
-        received = 0; rendered = 0; recoveries = 0; bytes = 0; maxArrivalGapNs = 0
-        touchSamples = 0; touchLatencySumNs = 0; maxTouchLatencyNs = 0
+        windowStartNs.set(now)
         return line
+    }
+
+    private fun updateMax(target: AtomicLong, value: Long) {
+        while (true) {
+            val current = target.get()
+            if (value <= current) return
+            if (target.compareAndSet(current, value)) return
+        }
     }
 
     private companion object {

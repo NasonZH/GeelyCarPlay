@@ -114,6 +114,7 @@ class IapTunnel(
             val input = sock.getInputStream()
             val chunk = ByteArray(READ_CHUNK_BYTES)
             val frameAad = ByteArray(FRAME_HEADER_LEN)
+            val nonceBuffer = ByteArray(AirPlayCrypto.NONCE_SIZE)
             while (!closed.get()) {
                 val read = input.read(chunk)
                 if (read < 0) {
@@ -138,7 +139,7 @@ class IapTunnel(
                     System.arraycopy(ciphertext, frameOffset, frameAad, 0, FRAME_HEADER_LEN)
                     val plain = AirPlayCrypto.chachaOpen(
                         readKey,
-                        AirPlayCrypto.nonce64(readCounter.get()),
+                        AirPlayCrypto.nonce64Into(readCounter.get(), nonceBuffer),
                         ciphertext,
                         frameOffset + FRAME_HEADER_LEN,
                         length + TAG_SIZE,

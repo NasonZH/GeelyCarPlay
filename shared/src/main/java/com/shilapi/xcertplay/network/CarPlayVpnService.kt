@@ -20,6 +20,7 @@ import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.SocketException
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -265,14 +266,21 @@ class CarPlayVpnService : VpnService() {
         error: Throwable,
     ) {
         val message = error.message ?: error.javaClass.simpleName
-        Log.e(TAG, "CarPlay transport stopped: $message", error)
+        // 主动关闭时 accept 循环同样会抛 Socket closed 这里按正常关闭记录 不打扰界面
+        val expectedClose = !active.get() ||
+            (error is SocketException && message.contains("Socket closed"))
+        if (expectedClose) {
+            Log.i(TAG, "CarPlay transport closed: $message")
+        } else {
+            Log.e(TAG, "CarPlay transport stopped: $message", error)
+        }
         Thread(
             {
                 synchronized(this) {
                     if (generation != attachGeneration) return@Thread
                     releaseLocked()
                 }
-                listener.onTransportError(message)
+                if (!expectedClose) listener.onTransportError(message)
                 stopSelf()
             },
             "airplay-teardown",

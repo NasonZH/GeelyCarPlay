@@ -461,12 +461,13 @@ class AndroidMediaSink(
         mirrorDecoders(type).forEach { it.configure(codec, codecData) }
     }
 
-    override fun onVideoFrame(type: Int, naluBytes: ByteArray) {
+    override fun onVideoFrame(type: Int, frame: VideoFrame) {
         val now = SystemClock.elapsedRealtime()
         lastVideoFrameAt = now
         if (type == 110 && firstVideoFrameAt == 0L) firstVideoFrameAt = now
-        videoDecoder(type).submit(naluBytes)
-        mirrorDecoders(type).forEach { it.submit(naluBytes) }
+        videoDecoder(type).submit(frame)
+        mirrorDecoders(type).forEach { it.submit(frame) }
+        frame.release()
     }
 
     override fun onScreenStreamActive(type: Int, active: Boolean) {
@@ -741,9 +742,10 @@ private class VideoDecoder(
         queue.offer(VideoJob.Config(codec, codecData))
     }
 
-    fun submit(nalus: ByteArray) {
-        stats.onReceived(nalus.size)
-        queue.offer(VideoJob.Frame(nalus))
+    fun submit(frame: VideoFrame) {
+        frame.retain()
+        stats.onReceived(frame.length)
+        queue.offer(VideoJob.Frame(frame))
     }
 
     fun setSurface(surface: Surface?) {
@@ -782,6 +784,7 @@ private class VideoDecoder(
 
     override fun close() {
         running = false
+        queue.discardFrames()
         thread.interrupt()
     }
 
@@ -794,9 +797,10 @@ private class VideoDecoder(
                         is VideoJob.Config -> configureDecoder(job)
                         is VideoJob.Frame -> {
                             if (System.nanoTime() - job.receivedNs > MAX_FRAME_AGE_NS) {
+                                job.frame.release()
                                 queue.discardFrames()
                                 recover("video backlog exceeded 250 ms")
-                            } else feed(job.nalus)
+                            } else feed(job.frame)
                         }
                         is VideoJob.SurfaceChanged -> changeSurface(job.surface)
                         is VideoJob.DetachSurface -> {
@@ -987,40 +991,64 @@ private class VideoDecoder(
         requestKeyFrameIfDue()
     }
 
-    private fun feed(nalus: ByteArray) {
-        val annexB = MediaCodecSupport.toAnnexB(nalus)
-        val config = lastConfig ?: return
-        if (outputSurface == null) return
-        if (annexB.isEmpty()) { recover("invalid video access unit"); return }
-        if (!referenceChain.accepts(annexB, config.codec)) {
+    private fun feed(frame: VideoFrame) {
+        val bytes = frame.bytes
+        val length = MediaCodecSupport.toAnnexB(bytes, frame.length)
+        val config = lastConfig
+        if (length <= 0) {
+            frame.release()
+            recover("invalid video access unit")
+            return
+        }
+        if (config == null || outputSurface == null) {
+            frame.release()
+            return
+        }
+        if (!referenceChain.accepts(bytes, length, config.codec)) {
+            frame.release()
             requestKeyFrameIfDue()
             return
         }
         if (decoder == null) configureDecoder(config)
-        val codec = decoder ?: return
+        val codec = decoder
+        if (codec == null) {
+            frame.release()
+            return
+        }
         if (!submittedFrameLogged) {
             submittedFrameLogged = true
             Log.i(
                 TAG,
-                "video decoder first input avcc=${nalus.size} annexB=${annexB.size} " +
-                    "head=${annexB.take(16).joinToString("") { "%02x".format(it.toInt() and 0xff) }}",
+                "video decoder first input avcc=${frame.length} annexB=$length " +
+                    "head=${bytes.take(16).joinToString("") { "%02x".format(it.toInt() and 0xff) }}",
             )
         }
         val index = VideoInputPump.acquire(
             running = { running }, drain = { drainOutput(codec) },
             dequeue = { codec.dequeueInputBuffer(INPUT_TIMEOUT_US) },
         )
-        if (index < 0) { recover("video decoder input stalled"); return }
-        val input = checkNotNull(inputBufferAt(codec, index)) { "Decoder input buffer unavailable" }
+        if (index < 0) {
+            frame.release()
+            recover("video decoder input stalled")
+            return
+        }
+        val input = inputBufferAt(codec, index)
+        if (input == null) {
+            frame.release()
+            recover("video decoder input buffer unavailable")
+            return
+        }
         input.clear()
-        if (annexB.size <= input.remaining()) {
-            input.put(annexB)
-            codec.queueInputBuffer(index, 0, annexB.size, System.nanoTime() / 1000, 0)
+        if (length <= input.remaining()) {
+            input.put(bytes, 0, length)
+            codec.queueInputBuffer(index, 0, length, System.nanoTime() / 1000, 0)
             referenceChain.onQueued()
         } else {
+            frame.release()
             recover("video frame exceeded codec input capacity")
             return
         }
+        frame.release()
         drainOutput(codec)
     }
 
@@ -1153,6 +1181,10 @@ private class AudioRenderer(
     private var opusPcm = ByteArray(0)
     /** Absolute peak of the decoded PCM since the last stats line; 0 means true silence. */
     private var pcmPeak = 0
+    /** RTP 时间戳前向跳变统计 只在 AAC 下按 1024 采样帧折算 */
+    private var expectedSampleTimestamp = 0L
+    private var gapEvents = 0
+    private var gapFrames = 0L
     private var track: AudioTrack? = null
     private var pcm = ByteArray(64 * 1024)
     /** Reused across drain calls: one BufferInfo per renderer instead of one per packet. */
@@ -1281,7 +1313,8 @@ private class AudioRenderer(
             createTrack()
             requestAudioFocus()
             while (running) {
-                queue.poll(AUDIO_POLL_MILLIS, TimeUnit.MILLISECONDS)?.let(::handle)
+                val pollMillis = if (playbackStarted) AUDIO_POLL_MILLIS else AUDIO_IDLE_POLL_MILLIS
+                queue.poll(pollMillis, TimeUnit.MILLISECONDS)?.let(::handle)
                 // Output becomes ready asynchronously, including after the last packet of a burst.
                 // Waiting for the next UDP packet can strand decoded sound for hundreds of ms.
                 codec?.let(::drainCodec)
@@ -1562,6 +1595,7 @@ private class AudioRenderer(
     private fun handle(packet: AudioPacket) {
         val rtp = packet.rtp
         val timestampUs = sampleTimestampUs(packet.sample)
+        trackSampleGap(packet.sample)
         when (format.codec) {
             AudioCodecKind.LPCM -> writePcm(byteSwapS16(rtp.copyOfRange(12, rtp.size)))
             AudioCodecKind.AAC_LC -> {
@@ -1641,6 +1675,21 @@ private class AudioRenderer(
 
     private fun sampleTimestampUs(sample: Int): Long =
         (sample.toLong() and 0xffff_ffffL) * 1_000_000L / timestampRate
+
+    /** 记录 RTP 时间戳前向跳变 用于统计丢包造成的音频缺口 */
+    private fun trackSampleGap(sample: Int) {
+        if (format.codec != AudioCodecKind.AAC_LC) return
+        val current = sample.toLong() and 0xffff_ffffL
+        val expected = expectedSampleTimestamp
+        if (expected != 0L) {
+            val delta = (current - expected) and 0xffff_ffffL
+            if (delta > 0 && delta < MAX_GAP_SAMPLES) {
+                gapEvents++
+                gapFrames += delta / AAC_FRAME_SAMPLES
+            }
+        }
+        expectedSampleTimestamp = (current + AAC_FRAME_SAMPLES) and 0xffff_ffffL
+    }
 
     /** Writes an ADTS frame straight into the codec input buffer; false means "codec not ready". */
     private fun feedAacDirect(
@@ -1866,10 +1915,12 @@ private class AudioRenderer(
             "estimatedQueuedFrames=${queuedFrames ?: -1} writeErrors=$writeErrorsThisWindow " +
             "lastWriteError=${lastWriteErrorCode ?: "none"} zeroWrites=$zeroWritesThisWindow " +
             "partialWrites=$partialWritesThisWindow peak=$pcmPeak " +
-            "decoderDroppedTotal=$inputDropped outputBuffersTotal=$outputBuffers rebuffers=$rebufferCount ended=$force"
-        Log.i(STATS_TAG, line)
+            "decoderDroppedTotal=$inputDropped outputBuffersTotal=$outputBuffers rebuffers=$rebufferCount " +
+            "gaps=$gapEvents gapFrames=$gapFrames ended=$force"
         report(line)
         pcmPeak = 0
+        gapEvents = 0
+        gapFrames = 0L
         statsLastUnderruns = underruns
         maxWriteMs = 0L
         writtenFramesThisWindow = 0L
@@ -1951,6 +2002,10 @@ private class AudioRenderer(
         const val OPUS_SEEK_PRE_ROLL_NANOS = 80_000_000L
         const val INPUT_TIMEOUT_US = 10_000L
         const val AUDIO_POLL_MILLIS = 20L
+        // 未起播时降低轮询频率 减少空闲唤醒
+        const val AUDIO_IDLE_POLL_MILLIS = 40L
+        const val AAC_FRAME_SAMPLES = 1_024L
+        const val MAX_GAP_SAMPLES = 96_000L
         const val BUFFER_TAIL_WAIT_NS = 500_000_000L
         // Holds a burst after a Wi-Fi gap (~4 s of AAC) instead of dropping it.
         const val MAX_QUEUED_PACKETS = 192
@@ -1958,9 +2013,8 @@ private class AudioRenderer(
         const val MAX_LIVE_QUEUED_PACKETS = 12
         /** After a trim the queue is cut to this many packets (120 ms) to give headroom again. */
         const val TRIM_TARGET_PACKETS = 6
-        const val STATS_TAG = "DiPlay-AudioStats"
         const val STATS_WINDOW_NS = 5_000_000_000L
-        // Periodic audio stats (DiPlay-AudioStats, every 5s) already carry the decode health; the
+        // Periodic audio stats (every 5s) already carry the decode health; the
         // per-buffer line was 50x more often and only added noise to the head-unit log.
         const val DECODED_BUFFER_LOG_INTERVAL = 600
     }
