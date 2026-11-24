@@ -488,13 +488,16 @@ class AirPlaySession(
     }
 
     private fun debugLog(message: String, uiVisible: Boolean = true, catVisible: Boolean = true) {
-        if (catVisible) Log.i(TAG, message)
-        if (!uiVisible) return
-        try {
-            listener.onDebugLog(message)
-        } catch (error: Exception) {
-            Log.w(TAG, "debug log callback failed", error)
+        // 界面汇会写一份脱敏日志到 logcat 有监听时不再重复写 监听失败才回退到 logcat
+        if (uiVisible) {
+            try {
+                listener.onDebugLog(message)
+                return
+            } catch (error: Exception) {
+                Log.w(TAG, "debug log callback failed", error)
+            }
         }
+        if (catVisible) Log.i(TAG, message)
     }
 
     /** Wire/hex tracing is gated: the message lambda is not evaluated while tracing is off. */

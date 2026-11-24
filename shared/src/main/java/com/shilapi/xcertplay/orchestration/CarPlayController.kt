@@ -2158,9 +2158,14 @@ class CarPlayController(
     }
 
     private fun debugLog(message: String) {
-        Log.i(IphoneCarPlayConfiguration.TAG, message)
+        // 界面汇会写一份脱敏日志到 logcat 这里不再重复写 未挂界面时才直接落 logcat
+        val listener = uiListener
+        if (listener == null) {
+            Log.i(IphoneCarPlayConfiguration.TAG, message)
+            return
+        }
         try {
-            uiListener?.onDebugLog(message)
+            listener.onDebugLog(message)
         } catch (error: Exception) {
             Log.w(IphoneCarPlayConfiguration.TAG, "debug log callback failed", error)
         }

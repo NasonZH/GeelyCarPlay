@@ -104,15 +104,18 @@ class IapTunnel(
     }
 
     private fun run(sock: Socket) {
-        var ciphertext = ByteArray(0)
-        var plaintext = ByteArray(0)
+        var ciphertext = ByteArray(READ_CHUNK_BYTES)
+        var cipherLength = 0
+        var plaintext = ByteArray(READ_CHUNK_BYTES)
+        var plainLength = 0
         var failure: Throwable? = null
         var announcedData = false
         try {
             val input = sock.getInputStream()
-            val buffer = ByteArray(READ_CHUNK_BYTES)
+            val chunk = ByteArray(READ_CHUNK_BYTES)
+            val frameAad = ByteArray(FRAME_HEADER_LEN)
             while (!closed.get()) {
-                val read = input.read(buffer)
+                val read = input.read(chunk)
                 if (read < 0) {
                     listener.onDebug("AirPlay iAP tunnel peer EOF")
                     break
@@ -121,11 +124,65 @@ class IapTunnel(
                     announcedData = true
                     listener.onDebug("AirPlay iAP tunnel received data")
                 }
-                ciphertext += buffer.copyOf(read)
-                val decrypted = decryptFrames(ciphertext)
-                plaintext += decrypted.first
-                ciphertext = decrypted.second
-                plaintext = parsePackages(plaintext)
+                if (cipherLength + read > ciphertext.size) {
+                    ciphertext = growBuffer(ciphertext, cipherLength + read)
+                }
+                System.arraycopy(chunk, 0, ciphertext, cipherLength, read)
+                cipherLength += read
+
+                var frameOffset = 0
+                while (cipherLength - frameOffset >= FRAME_HEADER_LEN) {
+                    val length = readU16Le(ciphertext, frameOffset)
+                    val frameLength = FRAME_HEADER_LEN + length + TAG_SIZE
+                    if (cipherLength - frameOffset < frameLength) break
+                    System.arraycopy(ciphertext, frameOffset, frameAad, 0, FRAME_HEADER_LEN)
+                    val plain = AirPlayCrypto.chachaOpen(
+                        readKey,
+                        AirPlayCrypto.nonce64(readCounter.get()),
+                        ciphertext,
+                        frameOffset + FRAME_HEADER_LEN,
+                        length + TAG_SIZE,
+                        frameAad,
+                    )
+                    readCounter.incrementAndGet()
+                    if (plainLength + plain.size > plaintext.size) {
+                        plaintext = growBuffer(plaintext, plainLength + plain.size)
+                    }
+                    System.arraycopy(plain, 0, plaintext, plainLength, plain.size)
+                    plainLength += plain.size
+                    frameOffset += frameLength
+                }
+                if (frameOffset > 0) {
+                    System.arraycopy(ciphertext, frameOffset, ciphertext, 0, cipherLength - frameOffset)
+                    cipherLength -= frameOffset
+                }
+
+                var packageOffset = 0
+                while (plainLength - packageOffset >= PACKAGE_HEADER_LEN) {
+                    val size = readU32Be(plaintext, packageOffset)
+                    if (size < PACKAGE_HEADER_LEN || size > MAX_PACKAGE) break
+                    if (plainLength - packageOffset < size) break
+                    val messageType = readU32Be(plaintext, packageOffset + MESSAGE_TYPE_OFFSET)
+                    if (messageType == MSG_TYPE_COMM) {
+                        // Per-package iAP traffic is only useful during a protocol investigation.
+                        if (AirPlayTrace.enabled) {
+                            listener.onDebug(
+                                "AirPlay iAP tunnel package type=comm body=${size - PACKAGE_HEADER_LEN}",
+                            )
+                        }
+                        listener.onIap(
+                            plaintext.copyOfRange(
+                                packageOffset + PACKAGE_HEADER_LEN,
+                                packageOffset + size,
+                            ),
+                        )
+                    }
+                    packageOffset += size
+                }
+                if (packageOffset > 0) {
+                    System.arraycopy(plaintext, packageOffset, plaintext, 0, plainLength - packageOffset)
+                    plainLength -= packageOffset
+                }
             }
         } catch (error: Exception) {
             failure = error
@@ -136,44 +193,13 @@ class IapTunnel(
         }
     }
 
-    private fun decryptFrames(buffer: ByteArray): Pair<ByteArray, ByteArray> {
-        val output = ArrayList<ByteArray>()
-        var offset = 0
-        while (buffer.size - offset >= FRAME_HEADER_LEN) {
-            val length = readU16Le(buffer, offset)
-            val frameLength = FRAME_HEADER_LEN + length + TAG_SIZE
-            if (buffer.size - offset < frameLength) break
-            val aad = buffer.copyOfRange(offset, offset + FRAME_HEADER_LEN)
-            val sealed = buffer.copyOfRange(offset + FRAME_HEADER_LEN, offset + frameLength)
-            val plain = AirPlayCrypto.chachaOpen(
-                readKey, AirPlayCrypto.nonce64(readCounter.get()), sealed, aad,
-            )
-            readCounter.incrementAndGet()
-            output.add(plain)
-            offset += frameLength
+    /** 按需扩容 保留已有内容 避免逐块整体复制 */
+    private fun growBuffer(buffer: ByteArray, minimumSize: Int): ByteArray {
+        var capacity = buffer.size.coerceAtLeast(READ_CHUNK_BYTES)
+        while (capacity < minimumSize) {
+            capacity = if (capacity > Int.MAX_VALUE / 2) minimumSize else capacity * 2
         }
-        return concatBytes(*output.toTypedArray()) to buffer.copyOfRange(offset, buffer.size)
-    }
-
-    private fun parsePackages(buffer: ByteArray): ByteArray {
-        var offset = 0
-        while (buffer.size - offset >= PACKAGE_HEADER_LEN) {
-            val size = readU32Be(buffer, offset)
-            if (size < PACKAGE_HEADER_LEN || size > MAX_PACKAGE) break
-            if (buffer.size - offset < size) break
-            val messageType = readU32Be(buffer, offset + MESSAGE_TYPE_OFFSET)
-            if (messageType == MSG_TYPE_COMM) {
-                // Per-package iAP traffic is only useful during a protocol investigation.
-                if (AirPlayTrace.enabled) {
-                    listener.onDebug(
-                        "AirPlay iAP tunnel package type=comm body=${size - PACKAGE_HEADER_LEN}",
-                    )
-                }
-                listener.onIap(buffer.copyOfRange(offset + PACKAGE_HEADER_LEN, offset + size))
-            }
-            offset += size
-        }
-        return buffer.copyOfRange(offset, buffer.size)
+        return buffer.copyOf(capacity)
     }
 
     private fun readU16Le(source: ByteArray, offset: Int): Int =

@@ -34,6 +34,7 @@ class ConnectActivity : Activity() {
     private var stepIndex = STEP_CHOOSE
     private var connected = false
     private var autoEntered = false
+    private var renderedLogMessages: List<String> = emptyList()
     private var phoneLookupGeneration = 0
     private var hotspotLookupGeneration = 0
     private var hotspotReadFailure: CarHotspotFailure? = null
@@ -351,14 +352,29 @@ class ConnectActivity : Activity() {
 
     private fun renderLogs() {
         val container = findViewById<LinearLayout>(R.id.connect_log_lines)
-        container.removeAllViews()
-        for (message in CarPlaySessionManager.logs()) {
-            val line = layoutInflater.inflate(R.layout.item_connect_log, container, false) as TextView
-            line.text = message
-            container.addView(line)
+        val messages = CarPlaySessionManager.logs()
+        if (messages == renderedLogMessages) return
+        val appended = messages.size > renderedLogMessages.size &&
+            messages.subList(0, renderedLogMessages.size) == renderedLogMessages
+        if (appended) {
+            for (index in renderedLogMessages.size until messages.size) {
+                container.addView(inflateLogLine(messages[index], container))
+            }
+        } else {
+            container.removeAllViews()
+            for (message in messages) {
+                container.addView(inflateLogLine(message, container))
+            }
         }
+        renderedLogMessages = messages
         val scroll = findViewById<ScrollView>(R.id.connect_log_scroll)
         scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+    }
+
+    private fun inflateLogLine(message: String, container: LinearLayout): TextView {
+        val line = layoutInflater.inflate(R.layout.item_connect_log, container, false) as TextView
+        line.text = message
+        return line
     }
 
     private fun render() {

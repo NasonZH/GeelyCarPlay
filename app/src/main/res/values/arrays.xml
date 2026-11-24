@@ -13,6 +13,7 @@
     </string-array>
 
     <string-array name="settings_music_buffer_values">
+        <item>300 毫秒 · 低延迟</item>
         <item>500 毫秒 · 默认</item>
         <item>1000 毫秒 · 更稳定</item>
     </string-array>

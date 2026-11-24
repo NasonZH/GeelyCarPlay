@@ -54,6 +54,11 @@ object CarPlaySessionManager {
     /** 复用同一个格式化器 每条日志都新建 SimpleDateFormat 在车机上开销明显 */
     private val logTimeLock = Any()
     private val logTimeFormat = SimpleDateFormat("HH:mm:ss", Locale.CHINA)
+    /** 每秒允许写入的常规日志条数 超出部分按秒合并 避免连接阶段刷屏 */
+    private const val LOG_BURST_LIMIT_PER_SECOND = 12
+    private var logBurstWindowStartMs = 0L
+    private var logBurstCount = 0
+    private var logBurstSuppressed = 0
     private val sessions = java.util.concurrent.CopyOnWriteArraySet<AirPlaySession>()
     @Volatile private var generation = 0
     private var controller: CarPlayController? = null
@@ -64,6 +69,8 @@ object CarPlaySessionManager {
     private var linkWatchdog: ScheduledExecutorService? = null
     private var watchdogStartedAt = 0L
     @Volatile private var timingSignalMissingLogged = false
+    /** /proc/net/snmp 可读性 读取被系统拒绝后不再每 5 秒重试 */
+    private var tcpRetransReadable: Boolean? = null
     /** 链路诊断上一窗口的累计值 用于计算接收速率和重传增量 */
     private var lastDiagAt = 0L
     private var lastDiagRxBytes = 0L
@@ -490,7 +497,13 @@ object CarPlaySessionManager {
 
     /** 系统 TCP 重传计数 增量持续升高说明链路在丢包重传 读不到时返回 null */
     private fun readTcpRetransSegs(): Long? {
-        val lines = runCatching { File("/proc/net/snmp").readLines() }.getOrNull() ?: return null
+        if (tcpRetransReadable == false) return null
+        val lines = runCatching { File("/proc/net/snmp").readLines() }.getOrNull()
+        if (lines == null) {
+            tcpRetransReadable = false
+            return null
+        }
+        tcpRetransReadable = true
         val headerIndex = lines.indexOfFirst { it.startsWith("Tcp:") }
         if (headerIndex < 0) return null
         val names = lines[headerIndex].removePrefix("Tcp:").trim().split(Regex("\\s+"))
@@ -626,6 +639,39 @@ object CarPlaySessionManager {
     }
 
     private fun appendLog(message: String) {
+        if (!allowLogLine(message)) return
+        writeLogLine(message)
+    }
+
+    /** 高频阶段限制写入速率 失败/错误类关键行与详细日志模式始终保留 */
+    private fun allowLogLine(message: String): Boolean {
+        if (com.shilapi.xcertplay.diagnostics.DiagnosticLog.verbose) return true
+        if (isCriticalLog(message)) return true
+        val now = SystemClock.elapsedRealtime()
+        if (now - logBurstWindowStartMs >= 1_000L) {
+            logBurstWindowStartMs = now
+            logBurstCount = 0
+            if (logBurstSuppressed > 0) {
+                writeLogLine("日志采样: 上一秒省略 ${logBurstSuppressed} 条高频日志")
+                logBurstSuppressed = 0
+            }
+        }
+        if (logBurstCount < LOG_BURST_LIMIT_PER_SECOND) {
+            logBurstCount++
+            return true
+        }
+        logBurstSuppressed++
+        return false
+    }
+
+    private fun isCriticalLog(message: String): Boolean =
+        message.contains("失败") || message.contains("错误") || message.contains("异常") ||
+            message.contains("超时") || message.contains("断开") || message.contains("取消") ||
+            message.startsWith("连接时间线") || message.startsWith("会话诊断") ||
+            message.startsWith("链路诊断") || message.startsWith("画布 ") ||
+            message.startsWith("音频能力")
+
+    private fun writeLogLine(message: String) {
         val safeMessage = com.shilapi.xcertplay.DiagnosticRedactor.redact(message) ?: return
         android.util.Log.i("GeelyCarPlay", safeMessage)
         val time = synchronized(logTimeLock) { logTimeFormat.format(Date()) }

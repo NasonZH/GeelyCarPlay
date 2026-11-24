@@ -51,6 +51,9 @@ class AudioStream(
     private var dataThread: Thread? = null
     private var controlThread: Thread? = null
     private var started = false
+    /** 复用 AEAD 附加数据与 nonce 缓冲 避免每个音频包各分配一份 */
+    private val aadBuffer = ByteArray(RTP_HEADER_LEN - 4)
+    private val nonceBuffer = ByteArray(4 + NONCE_LEN)
 
     fun listen(listener: Listener): Pair<Int, Int> {
         val data = bindAnyPort()
@@ -121,15 +124,20 @@ class AudioStream(
                     continue
                 }
 
-                val aad = wire.copyOfRange(4, RTP_HEADER_LEN)
+                wire.copyInto(aadBuffer, 0, 4, RTP_HEADER_LEN)
                 val sealedEnd = wire.size - NONCE_LEN
-                val sealed = wire.copyOfRange(RTP_HEADER_LEN, sealedEnd)
-                val shortNonce = wire.copyOfRange(sealedEnd, wire.size)
-                val nonce = ByteArray(12).also { shortNonce.copyInto(it, 4) }
+                wire.copyInto(nonceBuffer, 4, sealedEnd, wire.size)
                 val sample = readU32Be(wire, 4)
 
                 val payload = try {
-                    AirPlayCrypto.chachaOpen(key, nonce, sealed, aad)
+                    AirPlayCrypto.chachaOpen(
+                        key,
+                        nonceBuffer,
+                        wire,
+                        RTP_HEADER_LEN,
+                        sealedEnd - RTP_HEADER_LEN,
+                        aadBuffer,
+                    )
                 } catch (error: Exception) {
                     val failureNumber = authenticationFailures.incrementAndGet()
                     if (failureNumber == 1) {
@@ -144,7 +152,10 @@ class AudioStream(
                     stats.processed()
                     continue
                 }
-                val rtp = wire.copyOf(RTP_HEADER_LEN) + payload
+                // 复用 RTP 头 一次分配代替 copyOf + 拼接
+                val rtp = ByteArray(RTP_HEADER_LEN + payload.size)
+                wire.copyInto(rtp, 0, 0, RTP_HEADER_LEN)
+                payload.copyInto(rtp, RTP_HEADER_LEN)
                 val decryptedNumber = decryptedPackets.incrementAndGet()
                 if (decryptedNumber <= FIRST_PACKET_LOG_COUNT) {
                     android.util.Log.i(

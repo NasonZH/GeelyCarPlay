@@ -72,10 +72,12 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         val stats = StreamReceiveStats("video", onDiagnostic)
         try {
             val input = sock.getInputStream()
+            // 复用 128 字节头部缓冲 每帧只分配负载本身
+            val headerBuffer = ByteArray(HEADER_LEN)
             while (!closed.get()) {
                 stats.reading()
                 stage = "读取头部"
-                val header = readFully(input, HEADER_LEN)
+                val header = readFully(input, headerBuffer)
                 if (header == null) {
                     exitReason = "头部 EOF"
                     break
@@ -145,6 +147,17 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
             offset += read
         }
         return output
+    }
+
+    /** 读满已有缓冲 用于复用固定长度的头部 */
+    private fun readFully(input: InputStream, into: ByteArray): ByteArray? {
+        var offset = 0
+        while (offset < into.size) {
+            val read = input.read(into, offset, into.size - offset)
+            if (read < 0) return null
+            offset += read
+        }
+        return into
     }
 
     private companion object {

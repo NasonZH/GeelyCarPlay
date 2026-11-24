@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay.transport
 
+import com.shilapi.xcertplay.diagnostics.DiagnosticLog
 import com.shilapi.xcertplay.iap2.message.Iap2CarPlayMessages
 import com.shilapi.xcertplay.iap2.message.Iap2WirelessMessages
 import com.shilapi.xcertplay.iap2.message.Iap2WirelessSessionParameters
@@ -76,6 +77,30 @@ class Iap2WirelessControlClient(
         var wirelessCarPlayAvailableSeen = false
         val location = Iap2LocationReporter(locationProvider, onProgress, locationRequest, continueLocationRequest)
         val vehicleStatus = Iap2VehicleStatusReporter(vehicleStatusProvider, onProgress)
+        // 未识别消息默认只做窗口汇总 逐条明细仅在设置页打开详细日志时输出
+        val unhandledCounts = HashMap<Int, Int>()
+        var unhandledWindowStartNs = System.nanoTime()
+        var unhandledWindowCount = 0
+        fun noteUnhandledMessage(messageId: Int) {
+            if (DiagnosticLog.verbose) {
+                onProgress("iap2 rx=0x${messageId.toString(16).padStart(4, '0')}")
+            }
+            unhandledCounts[messageId] = (unhandledCounts[messageId] ?: 0) + 1
+            unhandledWindowCount++
+            val now = System.nanoTime()
+            if (now - unhandledWindowStartNs < UNHANDLED_SUMMARY_INTERVAL_NS) return
+            val summary = unhandledCounts.entries
+                .sortedByDescending { it.value }
+                .take(6)
+                .joinToString(", ") { "0x${it.key.toString(16).padStart(4, '0')}×${it.value}" }
+            onProgress(
+                "iap2 rx 未处理消息 ${UNHANDLED_SUMMARY_INTERVAL_MS / 1000}s 汇总: " +
+                    "total=$unhandledWindowCount [$summary]",
+            )
+            unhandledCounts.clear()
+            unhandledWindowCount = 0
+            unhandledWindowStartNs = now
+        }
         while (true) {
                 val remaining = remainingMillis(deadlineNanos)
                 if (remaining == 0L) {
@@ -220,7 +245,7 @@ class Iap2WirelessControlClient(
                     }
 
                     else -> {
-                        onProgress("iap2 rx=0x${incoming.messageId.toString(16).padStart(4, '0')}")
+                        noteUnhandledMessage(incoming.messageId)
                         onIncoming(incoming)
                         forwardedFrames++
                     }
@@ -241,6 +266,8 @@ class Iap2WirelessControlClient(
         private const val DEVICE_TRANSPORT_IDENTIFIER_NOTIFICATION = 0x4e0e
         const val NO_TIMEOUT_MILLIS = Long.MAX_VALUE
         private const val DEFAULT_TIMEOUT_MILLIS = 60_000L
+        private const val UNHANDLED_SUMMARY_INTERVAL_MS = 5_000L
+        private const val UNHANDLED_SUMMARY_INTERVAL_NS = UNHANDLED_SUMMARY_INTERVAL_MS * 1_000_000L
         private const val MAX_TIMEOUT_MILLIS = 24 * 60 * 60 * 1_000L
         private const val MAX_RECV_TIMEOUT_MILLIS = 5 * 60 * 1_000L
         private const val MAX_PRE_TRANSPORT_WIFI_CONFIGURATION_SENDS = 5

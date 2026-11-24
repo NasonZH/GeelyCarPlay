@@ -6,8 +6,9 @@ package com.shilapi.xcertplay.media
  * outlasts them. Calls, Siri and navigation prompts keep the small low-latency buffer.
  */
 object MediaAudioBuffer {
+    const val LOW_LATENCY_MILLIS = 300
     const val DEFAULT_MILLIS = 500
-    val presets = listOf(DEFAULT_MILLIS, 1000)
+    val presets = listOf(LOW_LATENCY_MILLIS, DEFAULT_MILLIS, 1000)
 
     private const val HEADROOM_MILLIS = 200 // room above the start level so bursts after a gap fit
     // Low-latency buffers are measured in time: voice decodes at 16 kHz, where a byte floor would

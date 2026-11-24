@@ -5,6 +5,8 @@ import com.shilapi.xcertplay.airplay.VideoCodec
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 internal sealed interface VideoJob {
     data class Config(val codec: VideoCodec, val codecData: ByteArray) : VideoJob
@@ -31,16 +33,20 @@ internal class VideoDecodeQueue(
     private val maxBytes: Int = 8 * 1024 * 1024,
 ) {
     private val jobs = LinkedBlockingQueue<VideoJob>()
+    // 计数代替每帧遍历队列 解码线程取走时同步递减
+    private val frameCount = AtomicInteger(0)
+    private val frameBytes = AtomicLong(0)
 
     @Synchronized fun offer(job: VideoJob) {
         if (job is VideoJob.Frame) {
-            val frames = jobs.filterIsInstance<VideoJob.Frame>()
-            if (frames.size >= maxFrames || frames.sumOf { it.nalus.size.toLong() } + job.nalus.size > maxBytes) {
+            if (frameCount.get() >= maxFrames || frameBytes.get() + job.nalus.size > maxBytes) {
                 discardFrames()
                 jobs.offer(VideoJob.Resync)
             }
             // A single oversized frame is also a lost reference chain.
             if (job.nalus.size > maxBytes) return
+            frameCount.incrementAndGet()
+            frameBytes.addAndGet(job.nalus.size.toLong())
         }
         jobs.offer(job)
     }
@@ -54,13 +60,22 @@ internal class VideoDecodeQueue(
                 else -> Unit
             }
         }
+        frameCount.set(0)
+        frameBytes.set(0)
     }
 
     fun completeSurfaceDetaches() {
         jobs.filterIsInstance<VideoJob.DetachSurface>().forEach { it.completed.countDown() }
     }
 
-    fun poll(timeoutMillis: Long): VideoJob? = jobs.poll(timeoutMillis, TimeUnit.MILLISECONDS)
+    fun poll(timeoutMillis: Long): VideoJob? {
+        val job = jobs.poll(timeoutMillis, TimeUnit.MILLISECONDS)
+        if (job is VideoJob.Frame) {
+            if (frameCount.get() > 0) frameCount.decrementAndGet()
+            if (frameBytes.addAndGet(-job.nalus.size.toLong()) < 0) frameBytes.set(0)
+        }
+        return job
+    }
 }
 
 /** Drain output while waiting for input: full output buffers can otherwise starve input forever. */

@@ -127,7 +127,7 @@
     <string name="settings_resolution">分辨率</string>
     <string name="settings_resolution_desc">一般保持原生；仅在车机出现黑屏或裁剪时才调整。</string>
     <string name="settings_music_buffer">音乐缓冲</string>
-    <string name="settings_music_buffer_desc">缓冲越大越稳定，延迟越高。</string>
+    <string name="settings_music_buffer_desc">缓冲越小起播越快、延迟越低；无线不稳定时可调大。</string>
     <string name="settings_video_output">视频显示方式</string>
     <string name="settings_video_output_desc">自动优先 SurfaceView，初始化失败时回退兼容模式；重新进入投屏后生效。</string>
     <string name="settings_frame_rate">帧率</string>

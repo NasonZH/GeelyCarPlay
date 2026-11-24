@@ -92,11 +92,30 @@ object AirPlayCrypto {
         nonce: ByteArray,
         ciphertextAndTag: ByteArray,
         aad: ByteArray = ByteArray(0),
+    ): ByteArray = chachaOpen(
+        key,
+        nonce,
+        ciphertextAndTag,
+        0,
+        ciphertextAndTag.size,
+        aad,
+    )
+
+    /** 从共享缓冲区直接解密的版本 避免每帧复制密文 */
+    fun chachaOpen(
+        key: ByteArray,
+        nonce: ByteArray,
+        ciphertextAndTag: ByteArray,
+        ciphertextOffset: Int,
+        ciphertextLength: Int,
+        aad: ByteArray,
     ): ByteArray {
         val cipher = ChaCha20Poly1305()
         cipher.init(false, AEADParameters(KeyParameter(key), MAC_BITS, nonce, aad))
-        val output = ByteArray(cipher.getOutputSize(ciphertextAndTag.size))
-        val processed = cipher.processBytes(ciphertextAndTag, 0, ciphertextAndTag.size, output, 0)
+        val output = ByteArray(cipher.getOutputSize(ciphertextLength))
+        val processed = cipher.processBytes(
+            ciphertextAndTag, ciphertextOffset, ciphertextLength, output, 0,
+        )
         val finalized = cipher.doFinal(output, processed)
         val outputLength = processed + finalized
         return if (outputLength == output.size) output else output.copyOf(outputLength)
