@@ -116,11 +116,21 @@ class ConnectActivity : Activity() {
         val token = ++phoneLookupGeneration
         val app = applicationContext
         val geely = AirPlayPersistence.loadGeelyBluetoothConnectionEnabled(this)
+        val sessionConnected = CarPlaySessionManager.isConnected
         Thread({
             val result = runCatching {
+                val connectedAddresses = BluetoothOnline.connectedAddresses(app)
                 if (geely) {
                     AnwBluetoothBackend(app).pairedDevices().map {
-                        PairedPhone(it.address, it.name, isOnline = it.address.equals(DiPlayPreferences.phoneAddress(app), ignoreCase = true))
+                        PairedPhone(
+                            it.address,
+                            it.name,
+                            isOnline = (sessionConnected &&
+                                it.address.equals(DiPlayPreferences.phoneAddress(app), ignoreCase = true)) ||
+                                connectedAddresses.any { address ->
+                                    address.equals(it.address, ignoreCase = true)
+                                },
+                        )
                     }
                 } else {
                     val adapter = (app.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
@@ -132,9 +142,10 @@ class ConnectActivity : Activity() {
                                 address = it.address,
                                 name = it.name ?: getString(R.string.connect_phone_unnamed),
                                 isPhone = it.bluetoothClass?.majorDeviceClass == BluetoothClass.Device.Major.PHONE,
-                                isOnline = isBluetoothConnected(it) ||
-                                    (CarPlaySessionManager.isRunning &&
-                                        it.address.equals(DiPlayPreferences.phoneAddress(app), ignoreCase = true)),
+                                isOnline = connectedAddresses.any { address ->
+                                    address.equals(it.address, ignoreCase = true)
+                                } || (sessionConnected &&
+                                    it.address.equals(DiPlayPreferences.phoneAddress(app), ignoreCase = true)),
                             )
                         }
                 }
@@ -143,7 +154,7 @@ class ConnectActivity : Activity() {
                 if (token != phoneLookupGeneration || isFinishing || isDestroyed) return@runOnUiThread
                 list.removeAllViews()
                 result.fold(
-                    onSuccess = { devices -> showPhoneList(list, devices, geely) },
+                    onSuccess = { devices -> showPhoneList(list, devices, geely, sessionConnected) },
                     onFailure = { addPhoneHint(list, it.message ?: getString(R.string.connect_phone_read_failed)) },
                 )
             }
@@ -155,7 +166,7 @@ class ConnectActivity : Activity() {
      * 原厂蓝牙配对列表本身只含目标设备 不再筛选
      * 识别不到时回退显示全部 避免完全选不到设备
      */
-    private fun showPhoneList(list: LinearLayout, devices: List<PairedPhone>, geely: Boolean) {
+    private fun showPhoneList(list: LinearLayout, devices: List<PairedPhone>, geely: Boolean, sessionConnected: Boolean) {
         val candidates = if (geely) {
             devices
         } else {
@@ -181,14 +192,23 @@ class ConnectActivity : Activity() {
         for (device in sorted) {
             val row = layoutInflater.inflate(R.layout.item_iphone, list, false)
             row.findViewById<TextView>(R.id.iphone_name).text = device.name
-            val online = device.isOnline
+            // 会话在线时只有一个候选设备说明它就是当前连接的手机
+            val online = device.isOnline || (sessionConnected && sorted.size == 1)
             row.findViewById<TextView>(R.id.iphone_state).apply {
                 setText(if (online) R.string.connect_phone_online else R.string.connect_phone_paired)
                 setTextColor(color(if (online) R.color.ok else R.color.text_tertiary))
             }
-            row.setOnClickListener {
-                DiPlayPreferences.savePhone(this, device.address, device.name, geely)
-                stepTo(STEP_LINK)
+            row.findViewById<TextView>(R.id.iphone_name).setTextColor(
+                color(if (online) R.color.text_primary else R.color.text_tertiary),
+            )
+            // 未在线设备置灰且不响应点击 避免对未连接的手机发起连接
+            row.isEnabled = online
+            row.alpha = if (online) 1f else 0.5f
+            if (online) {
+                row.setOnClickListener {
+                    DiPlayPreferences.savePhone(this, device.address, device.name, geely)
+                    stepTo(STEP_LINK)
+                }
             }
             list.addView(row)
         }
@@ -211,11 +231,6 @@ class ConnectActivity : Activity() {
         val isPhone: Boolean = false,
         val isOnline: Boolean = false,
     )
-
-    /** 蓝牙链路是否已连接 用隐藏方法读取 与控制器中的判断保持一致 */
-    private fun isBluetoothConnected(device: android.bluetooth.BluetoothDevice): Boolean = runCatching {
-        android.bluetooth.BluetoothDevice::class.java.getMethod("isConnected").invoke(device) as? Boolean == true
-    }.getOrDefault(false)
 
     private fun refreshHotspot() {
         val token = ++hotspotLookupGeneration

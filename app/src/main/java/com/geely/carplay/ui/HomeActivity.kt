@@ -138,7 +138,7 @@ class HomeActivity : Activity() {
             return
         }
         background.execute {
-            val target = history.firstOrNull { isBluetoothConnected(it.address) }
+            val target = history.firstOrNull { BluetoothOnline.isConnected(this, it.address) }
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
                 if (target == null) {
@@ -195,13 +195,6 @@ class HomeActivity : Activity() {
         findViewById<TextView>(R.id.home_hint).text = message
     }
 
-    private fun isBluetoothConnected(address: String): Boolean = runCatching {
-        val adapter = (getSystemService(BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)?.adapter
-            ?: return false
-        val device = adapter.getRemoteDevice(address)
-        android.bluetooth.BluetoothDevice::class.java.getMethod("isConnected").invoke(device) as? Boolean == true
-    }.getOrDefault(false)
-
     private fun confirmExit() {
         if (CarPlaySessionManager.isExiting) return
         if (CarPlaySessionManager.isRunning || CarPlaySessionManager.isConnected) {
@@ -254,7 +247,7 @@ class HomeActivity : Activity() {
             val bluetooth = if (geely) null else runCatching {
                 (app.getSystemService(BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)?.adapter?.isEnabled
             }.getOrNull()
-            val bluetoothOnline = phoneAddress != null && (geely || isBluetoothConnected(phoneAddress))
+            val bluetoothOnline = phoneAddress != null && BluetoothOnline.isConnected(app, phoneAddress)
             runOnUiThread {
                 if (token != deviceStateGeneration || isFinishing || isDestroyed) return@runOnUiThread
                 val sessionOnline = CarPlaySessionManager.isConnected
@@ -293,15 +286,24 @@ class HomeActivity : Activity() {
         findViewById<TextView>(R.id.home_device_label).text =
             getString(if (connected) R.string.home_current_device else R.string.home_last_device)
         findViewById<TextView>(R.id.home_device).apply {
-            text = if (hasDevice && !online) getString(R.string.home_device_offline, name) else name
+            text = when {
+                connected && !hasDevice -> "iPhone"
+                connected -> name
+                hasDevice && !online -> getString(R.string.home_device_offline, name)
+                else -> name
+            }
             setTextColor(resources.getColor(when {
+                connected || online -> R.color.text_primary
                 !hasDevice -> R.color.text_tertiary
-                online -> R.color.text_primary
                 else -> R.color.text_secondary
             }))
         }
         findViewById<View>(R.id.home_device_dot).setBackgroundResource(
-            if (hasDevice && online) R.drawable.dot_ok else R.drawable.dot_muted
+            if (connected || (hasDevice && online)) R.drawable.dot_ok else R.drawable.dot_muted
+        )
+        android.util.Log.i(
+            "GeelyCarPlay",
+            "设备在线: connected=$connected hasDevice=$hasDevice online=$online bluetoothOnlineOnly=${online && !connected}",
         )
     }
 

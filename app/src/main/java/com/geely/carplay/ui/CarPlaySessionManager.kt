@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioManager
 import android.net.TrafficStats
 import android.net.wifi.WifiManager
 import android.os.Handler
@@ -47,6 +48,8 @@ object CarPlaySessionManager {
     private const val RETRANS_SAMPLE_INTERVAL_MILLIS = 15_000L
     /** 连接后多久内自动暂停手机续播的音乐 超过这个时间视为用户主动播放 */
     private const val AUTO_PAUSE_WINDOW_MILLIS = 15_000L
+    /** 一次通话内最多尝试拉回投屏页的次数 */
+    private const val MAX_CALL_BRING_ATTEMPTS = 5
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
     private val commands = Executors.newSingleThreadExecutor()
@@ -70,6 +73,12 @@ object CarPlaySessionManager {
     private var surfaceFrameRendered = false
     private var linkWatchdog: ScheduledExecutorService? = null
     private var watchdogStartedAt = 0L
+    /** 上一次检查时的通话状态 只在进入通话时拉回投屏页 */
+    private var callActive = false
+    /** 当前投屏页是否在前台 由 CarPlayActivity 生命周期更新 */
+    @Volatile private var screenResumed = false
+    private var lastAudioMode = -1
+    private var callBringAttempts = 0
     @Volatile private var timingSignalMissingLogged = false
     /** /proc/net/snmp 可读性 读取被系统拒绝后不再每 5 秒重试 */
     private var tcpRetransReadable: Boolean? = null
@@ -417,8 +426,15 @@ object CarPlaySessionManager {
             Thread(runnable, "carplay-link-watchdog").apply { isDaemon = true }
         }
         linkWatchdog = watchdog
+        callActive = false
         watchdog.scheduleWithFixedDelay(
             { runCatching { checkWirelessLink(app, token) } },
+            LINK_CHECK_INTERVAL_MILLIS,
+            LINK_CHECK_INTERVAL_MILLIS,
+            TimeUnit.MILLISECONDS,
+        )
+        watchdog.scheduleWithFixedDelay(
+            { runCatching { checkCallState(app, token) } },
             LINK_CHECK_INTERVAL_MILLIS,
             LINK_CHECK_INTERVAL_MILLIS,
             TimeUnit.MILLISECONDS,
@@ -445,8 +461,54 @@ object CarPlaySessionManager {
         main.post { finishLostLink(token, app, silentMillis) }
     }
 
-    /** 时间同步一直没回包时只记一次 便于判断检测为何没有生效 */
-    private fun logMissingTimingSignalOnce() {
+    /** 通话开始时把投屏页拉回前台 车机通话界面退到后面 通话本身不受影响 */
+    private fun checkCallState(app: Context, token: Int) {
+        if (generation != token || !isRunning) {
+            callActive = false
+            callBringAttempts = 0
+            return
+        }
+        val audio = app.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        val mode = audio.mode
+        val inCall = mode == AudioManager.MODE_IN_CALL ||
+            mode == AudioManager.MODE_IN_COMMUNICATION
+        if (mode != lastAudioMode) {
+            lastAudioMode = mode
+            appendLog("通话状态: mode=$mode inCall=$inCall connected=$isConnected screenResumed=$screenResumed")
+        }
+        if (!inCall || !isConnected || isExiting) {
+            callActive = false
+            callBringAttempts = 0
+            return
+        }
+        callActive = true
+        if (screenResumed) return
+        if (callBringAttempts >= MAX_CALL_BRING_ATTEMPTS) return
+        callBringAttempts++
+        bringCarPlayToFront(app, token)
+    }
+
+    private fun bringCarPlayToFront(app: Context, token: Int) {
+        main.post {
+            if (generation != token || !isConnected || isExiting) return@post
+            val intent = Intent(app, CarPlayActivity::class.java).apply {
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP,
+                )
+            }
+            val result = runCatching { app.startActivity(intent) }
+            appendLog("通话中拉回投屏 attempt=$callBringAttempts success=${result.isSuccess}")
+        }
+    }
+
+    /** 投屏页前后台状态 用于避免重复拉起同一个页面 */
+    fun noteScreenResumed(resumed: Boolean) {
+        screenResumed = resumed
+    }
+
+    /** 时间同步一直没回包时只记一次 便于判断检测为何没有生效 */    private fun logMissingTimingSignalOnce() {
         if (timingSignalMissingLogged) return
         if (SystemClock.elapsedRealtime() - watchdogStartedAt < TIMING_SIGNAL_LOG_DELAY_MILLIS) return
         timingSignalMissingLogged = true
@@ -685,6 +747,7 @@ object CarPlaySessionManager {
     private fun isCriticalLog(message: String): Boolean =
         message.contains("失败") || message.contains("错误") || message.contains("异常") ||
             message.contains("超时") || message.contains("断开") || message.contains("取消") ||
+            message.contains("通话") ||
             message.startsWith("连接时间线") || message.startsWith("会话诊断") ||
             message.startsWith("链路诊断") || message.startsWith("画布 ") ||
             message.startsWith("音频能力")

@@ -25,6 +25,20 @@ class AnwBluetoothBackend internal constructor(context: Context, private val sup
         AnwSppProtocol(binding.await()).pairedDevices()
     }
 
+    /** 已连接的 ANW 槽位地址 用于判断手机是否通过厂商蓝牙在线 */
+    fun connectedAddresses(): Set<String> = Binding().use { binding ->
+        val protocol = AnwSppProtocol(binding.await())
+        val addresses = mutableSetOf<String>()
+        for (index in 0..3) {
+            val state = runCatching { protocol.deviceState(index) }.getOrNull() ?: continue
+            val address = state.address
+            if (state.result == 1 && state.state == 1 && !address.isNullOrBlank()) {
+                addresses += address.uppercase(java.util.Locale.US)
+            }
+        }
+        addresses
+    }
+
     fun localAddress(): String = Binding().use { binding ->
         val address = AnwSppProtocol(binding.await()).localAddress()
         if (!address.matches(Regex("(?i)[0-9a-f]{2}(:[0-9a-f]{2}){5}")) || address == "00:00:00:00:00:00") {

@@ -31,6 +31,62 @@
 
 系统设置没有频段入口，只能改这个文件（需 root，`su` 在本机可用）。原值备份在 `/data/local/tmp/hotspot.band.bak`。应用已不再自动开启热点或蓝牙，排查时不要把启动初始化当成热点失败原因。
 
+## 2.4GHz 与 5GHz 热点信道、WMM 与 802.11n（2026-11-24 实机调整）
+
+音乐偶发断续，日志表现为音频 RTP 序号缺口：每 5 秒 2–4 次、单次缺 1–10 包，`Receive: audio` 的 `seqGapEvents/seqForwardGaps` 持续升高；应用侧 `dropped=0`、`lateOrDuplicate=0`、`trims=0`，同时链路诊断出现 TCP `重传=+15`。据此判定为 2.4GHz 空口丢包，不是音量、ducking 或应用主动丢弃。
+
+厂商包装脚本在 2.4G 分支不改写信道，默认沿用 `channel=6`。`hostapd_cli chan_switch` 被驱动拒绝，`set channel` 只改配置变量、射频仍停在 2437MHz，只有重启 hostapd 才生效。
+
+处理方式：修改 `/system/bin/hostapd` 包装脚本。2.4G 分支读取 `/data/misc/wifi/hotspot.channel` 覆盖 `channel` 并追加 `wmm_enabled=1`；5G 分支读取 `/data/misc/wifi/hotspot.channel5g`（缺省 36），写入 `hw_mode=a`、`channel=$CH5`、`ieee80211n=1`、`wmm_enabled=1`。当前配置：`hotspot.band=5g`、`hotspot.channel5g=149`，2.4G 备用信道 `hotspot.channel=11`。原脚本备份 `/data/local/tmp/hostapd.orig`，旧配置备份 `/data/misc/wifi/hostapd.conf.ch6.bak`，原频段文件备份 `/data/local/tmp/hotspot.band.2.4g.bak`。写入 `/system` 前需 `mount -o remount,rw /system`，完成后恢复只读。
+
+硬件能力：`wl -i wlan0 bands` 返回 `b a`，芯片为 Broadcom BCM4339（SDIO `02D0:4339`），5GHz 可用信道只有 149/153/157/161/165，没有 36。此前 5G 启动失败是厂商脚本写死 `channel=36` 导致 `Could not select hw_mode and channel`，不是硬件不支持。
+
+实测结论：信道 1 不可用，iPhone 加入后 `num_sta[0]=0`、视频静默约 2.7 秒、5 秒无响应断开；2.4GHz 信道 11 稳定（`freq=2462`），音乐缺口约 90 秒 1 次、2 帧（约 0.05%）；5GHz 信道 149 + 802.11n（`freq=5745`、`ieee80211n=1`）在 204 秒窗口内音乐 `gaps=0`、`Receive` 音频 `seqGapEvents=0`，GC 约 0.22 次/秒（平均暂停 18.7ms，最大 61ms），视频 8.6–30fps、1 次 `recoveries`。5GHz 内存占用更高：Dalvik 18.2MB、PSS 约 31.4MB，比 2.4GHz 多约 7MB，主要来自 `VideoFramePool` 上限 8MB。信道与 WMM/HT 同时生效，未单独区分各自贡献；5GHz 覆盖范围更小，不承诺零丢包，导航 Opus 缺口尚未做隐藏。
+
+修改后必须重启热点（应用断开重连会重新启动热点）；仅 reload 不生效。
+
+验证：
+
+```sh
+su -c 'hostapd_cli -p /data/misc/wifi/hostapd -i wlan0 status' | grep -E 'state=|freq=|channel=|ieee80211n|num_sta'
+su -c 'grep -E "channel=|hw_mode=|wmm_enabled=|ieee80211n=" /data/misc/wifi/hostapd.conf'
+```
+
+5GHz 正常应为 `freq=5745`、`channel=149`、`ieee80211n=1`、`num_sta[0]=1`；切回 2.4GHz 后为 `freq=2462`、`channel=11`。
+
+回滚：
+
+```sh
+su -c 'echo 2.4g > /data/misc/wifi/hotspot.band'
+su -c 'cp /data/local/tmp/hostapd.orig /system/bin/hostapd && chmod 755 /system/bin/hostapd'
+```
+
+改回 `2.4g` 即使用 2.4GHz 信道 11（保留 WMM）；恢复脚本则完全还原厂商行为（无 WMM、无信道覆盖）。
+
+注意：这些改动位于 `/system` 与 `/data`，不在 Git 中，OTA、换车或恢复出厂后会丢失，需要重新应用。
+
+## 通话时自动回到投屏（2026-11-24 调整）
+
+现象：通话接通后车机自带 `com.ecarx.btphone/.ui.CallingActivity` 切到前台，CarPlay 退到后面；手动缩小通话界面才回到 CarPlay。
+
+实现：`CarPlaySessionManager` 在链路看门狗里每 2 秒检查 `AudioManager.mode`，进入 `MODE_IN_CALL` 或 `MODE_IN_COMMUNICATION` 且会话已连接时，用 `FLAG_ACTIVITY_NEW_TASK | REORDER_TO_FRONT | SINGLE_TOP` 拉起 `CarPlayActivity`；投屏页前后台由 `CarPlayActivity.onResume/onPause` 写入 `noteScreenResumed`，每次通话最多尝试 5 次，通话结束或断开后重置。
+
+日志：`通话状态: mode=X inCall=? connected=? screenResumed=?` 与 `通话中拉回投屏 attempt=N success=?`；这两类行被列为关键日志，不受采样限流影响。
+
+限制：覆盖后挂断/拨号界面需要车机物理按键或返回；通话中主动离开投屏不会再次强制拉回；Android 10 手机端后台启动 Activity 可能被系统拦截（车机 4.3 不受影响）。这是产品行为选择，不是协议要求；未做“通话结束自动回到投屏”（车机本身会返回）。当前仍待用户实机验收。
+
+## 首页与连接页的设备在线判断（2026-11-24 调整）
+
+需求：未连接 CarPlay、仅手机蓝牙连接车机时，首页与“选择 iPhone”页也要显示设备在线。
+
+实现：新增 `BluetoothOnline`，按设备地址汇总在线集合：`BluetoothDevice.isConnected` 反射、HFP/A2DP 的已连接设备地址（`getProfileProxy` 后读 `connectedDevices`，后台线程最多等 400ms）、厂商 ANW 已连接槽位。首页用保存地址匹配；连接页先构建一次在线集合，再逐行匹配。
+
+连接页显示：在线行正常；离线行设备名与状态文字置灰、整行 `alpha=0.5`、`isEnabled=false`、不响应点击，避免对未连接手机发起连接。只有一个候选且会话已连接时视为当前设备。
+
+日志：首页每次刷新输出 `设备在线: connected=? hasDevice=? online=? bluetoothOnlineOnly=?`。
+
+注意：profile 绑定只在后台线程执行，主线程调用时跳过；厂商 ANW 查询仅在厂商蓝牙模式开启时执行；不再使用“厂商模式默认在线”的旧判断。
+
 ## 蓝牙快速失败
 
 历史IOException为`read failed, socket might closed or timeout, read ret: -1`，同步系统日志出现`sec_id:0 is zero or BTM_SetSecurityLevel failed, remote_scn:1`。发生在本机RFCOMM建立，尚未到认证，不是证书失败证据。用户重启蓝牙/设备后进入下一阶段；当时未加入盲目重试或不安全通道回退。复发需读取同时间段系统蓝牙日志。

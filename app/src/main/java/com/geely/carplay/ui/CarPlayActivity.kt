@@ -52,6 +52,7 @@ class CarPlayActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        CarPlaySessionManager.noteScreenResumed(true)
         if (CarPlaySessionManager.isExiting) {
             finish()
             return
@@ -60,6 +61,7 @@ class CarPlayActivity : Activity() {
     }
 
     override fun onPause() {
+        CarPlaySessionManager.noteScreenResumed(false)
         CarPlaySessionManager.removeObserver(observer)
         super.onPause()
     }
