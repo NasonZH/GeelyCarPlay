@@ -210,7 +210,7 @@ object CarPlaySessionManager {
                         modelIdentifier = "GKUI",
                         manufacturer = "车机",
                         serialNumber = "GEELY-" + deviceId.replace(":", ""),
-                        firmwareVersion = "1.0.0",
+                        firmwareVersion = "1.0.1",
                         hardwareVersion = "1.0",
                         carPlayUsbInterfaceNumber = 3,
                         locationInformationEnabled = locationEnabled,

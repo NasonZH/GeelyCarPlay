@@ -365,7 +365,12 @@ class SettingsActivity : Activity() {
                     showMessage("保存失败", error?.message ?: "无法写入报告")
                 }
             }
-            LinkAction.VERSION -> showMessage("版本", "Geely CarPlay 1.0.0\n已接入 DiPlay 处理层")
+            LinkAction.VERSION -> {
+                val version = runCatching {
+                    packageManager.getPackageInfo(packageName, 0).versionName
+                }.getOrNull() ?: "1.0.1"
+                showMessage("版本", "Geely CarPlay $version\n已接入 DiPlay 处理层")
+            }
             LinkAction.DEVICE -> showMessage("设备", "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}\nAndroid ${android.os.Build.VERSION.RELEASE}")
             LinkAction.LICENSES -> showMessage("开源许可", assets.open("open-source-notices.txt").bufferedReader().use { it.readText() })
         }

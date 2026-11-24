@@ -3,7 +3,7 @@ plugins {
 }
 
 // 基线版本号同时用于应用版本和 APK 输出文件名
-val appVersionName = "1.0.0"
+val appVersionName = "1.0.1"
 
 android {
     namespace = "com.geely.carplay.ui"
@@ -14,7 +14,7 @@ android {
         minSdk = 18
         targetSdk = 18
         multiDexEnabled = true
-        versionCode = 1
+        versionCode = 2
         versionName = appVersionName
     }
 
