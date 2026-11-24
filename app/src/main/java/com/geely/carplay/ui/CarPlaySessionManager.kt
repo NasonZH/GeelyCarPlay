@@ -4,8 +4,11 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.TrafficStats
+import android.net.wifi.WifiManager
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.Surface
 import com.shilapi.xcertplay.AirPlayPersistence
@@ -25,30 +28,62 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 
 /** 页面共享同一真实会话, Activity 销毁不影响后台连接 */
 object CarPlaySessionManager {
+    /** 未开始连接时 statusText 的初值 用于区分有无连接进度 */
+    const val STATUS_IDLE = "尚未连接"
+    /** 链路看门狗检查间隔 只做时间戳比较 不访问蓝牙 */
+    private const val LINK_CHECK_INTERVAL_MILLIS = 2_000L
+    /** 手机无响应后判定断开的宽限时间 */
+    private const val LINK_LOSS_TIMEOUT_MILLIS = 5_000L
+    /** 会话建立多久仍无时间同步回包时记录一次日志 */
+    private const val TIMING_SIGNAL_LOG_DELAY_MILLIS = 15_000L
+    /** 链路诊断采样间隔 与音视频统计的 5 秒窗口对齐 */
+    private const val LINK_DIAG_INTERVAL_MILLIS = 5_000L
+    /** 连接后多久内自动暂停手机续播的音乐 超过这个时间视为用户主动播放 */
+    private const val AUTO_PAUSE_WINDOW_MILLIS = 15_000L
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
     private val commands = Executors.newSingleThreadExecutor()
     private val notifyListeners = Runnable { listeners.toList().forEach { it() } }
     private val listeners = mutableSetOf<() -> Unit>()
     private val logLines = ArrayDeque<String>()
-    private val sessions = mutableSetOf<AirPlaySession>()
+    private val sessions = java.util.concurrent.CopyOnWriteArraySet<AirPlaySession>()
     @Volatile private var generation = 0
     private var controller: CarPlayController? = null
-    private var sink: AndroidMediaSink? = null
+    @Volatile private var sink: AndroidMediaSink? = null
     private var surface: Surface? = null
+    private var linkWatchdog: ScheduledExecutorService? = null
+    private var watchdogStartedAt = 0L
+    @Volatile private var timingSignalMissingLogged = false
+    /** 链路诊断上一窗口的累计值 用于计算接收速率和重传增量 */
+    private var lastDiagAt = 0L
+    private var lastDiagRxBytes = 0L
+    private var lastDiagRxPackets = 0L
+    private var lastDiagRetransSegs = 0L
+    /** 连接刚建立时是否还需要暂停手机自动续播的音乐 */
+    @Volatile private var autoPausePending = false
+    /** 连接时间线 全部使用 elapsedRealtime 毫秒 */
+    @Volatile private var connectStartedAt = 0L
+    private var sessionActiveAt = 0L
+    private var screenEntryAt = 0L
+    private var screenCreatedAt = 0L
+    private var surfaceReadyAt = 0L
+    private var firstFrameRenderedAt = 0L
+    private var firstTextureUpdatedAt = 0L
 
     var automaticConnectionAllowed = true
         private set
     @Volatile var isExiting = false
         private set
-    var isConnected = false
+    @Volatile var isConnected = false
         private set
-    var isRunning = false
+    @Volatile var isRunning = false
         private set
-    var statusText = "尚未连接"
+    var statusText = STATUS_IDLE
         private set
     var videoWidth = 1920
         private set
@@ -112,6 +147,14 @@ object CarPlaySessionManager {
         isConnected = false
         sessions.clear()
         logLines.clear()
+        connectStartedAt = SystemClock.elapsedRealtime()
+        sessionActiveAt = 0L
+        screenEntryAt = 0L
+        screenCreatedAt = 0L
+        surfaceReadyAt = 0L
+        firstFrameRenderedAt = 0L
+        firstTextureUpdatedAt = 0L
+        autoPausePending = false
         statusText = "正在初始化 CarPlay"
         changed()
         worker.execute {
@@ -137,9 +180,9 @@ object CarPlaySessionManager {
                     remoteMfiServer = AirPlayPersistence.loadRemoteMfiServer(app).takeIf { it.length > 0 },
                     remoteMfiToken = AirPlayPersistence.loadRemoteMfiToken(app).takeIf { it.length > 0 },
                     identification = Iap2IdentificationConfig(
-                        name = "Geely CarPlay",
+                        name = "车机",
                         modelIdentifier = "GKUI",
-                        manufacturer = "Geely",
+                        manufacturer = "车机",
                         serialNumber = "GEELY-" + deviceId.replace(":", ""),
                         firmwareVersion = "1.0.0",
                         hardwareVersion = "1.0",
@@ -188,7 +231,7 @@ object CarPlaySessionManager {
                     PackageManager.PERMISSION_GRANTED
                 deliver(token) { appendLog("音频能力: 麦克风可用=$microphone") }
                 val config = AirPlayConfig(
-                    deviceName = "Geely CarPlay",
+                    deviceName = "车机",
                     deviceId = deviceId,
                     btMac = DiPlayBluetooth.localAddress(app) ?: deviceId,
                     sourceVersion = "950.7.1",
@@ -196,9 +239,9 @@ object CarPlaySessionManager {
                     rightHandDrive = AirPlayPersistence.loadRightHandDrive(app),
                     hevc = AirPlayPersistence.loadHevcEnabled(app),
                     microphone = microphone,
-                    manufacturer = "Geely",
+                    manufacturer = "车机",
                     model = "GKUI",
-                    oemLabel = "Geely",
+                    oemLabel = "车机",
                     icons = listOf(loadBrandIcon(app)),
                 )
                 renderer = AndroidMediaSink(
@@ -222,6 +265,12 @@ object CarPlaySessionManager {
                         isConnected = true
                         statusText = "CarPlay 会话已建立"
                         appendLog(statusText)
+                        sessionActiveAt = SystemClock.elapsedRealtime()
+                        appendLog("连接时间线: 会话建立=${timelineMillis(sessionActiveAt)}")
+                        autoPausePending = true
+                        main.postDelayed({ if (generation == token) autoPausePending = false }, AUTO_PAUSE_WINDOW_MILLIS)
+                        rememberConnectedPhone(app)
+                        if (wireless) startLinkWatchdog(app, token)
                     }
                     override fun onSessionEnded(session: AirPlaySession) = deliver(token) {
                         sessions -= session
@@ -231,6 +280,10 @@ object CarPlaySessionManager {
                     }
                     override fun onVideoFrameRendered(session: AirPlaySession) = deliver(token) {
                         statusText = "CarPlay 画面已就绪"
+                        if (firstFrameRenderedAt == 0L) {
+                            firstFrameRenderedAt = SystemClock.elapsedRealtime()
+                            appendLog("连接时间线: 首帧渲染=${timelineMillis(firstFrameRenderedAt)}")
+                        }
                         changed()
                     }
                     override fun onDebugLog(message: String) = deliver(token) { appendLog(message) }
@@ -273,6 +326,10 @@ object CarPlaySessionManager {
                 )
                 val preparedController = next
                 val preparedSink = renderer
+                // iOS 在连接车机时会自动续播上次的音频 检测到开始播放后暂停一次
+                preparedController.playbackListener = { playing ->
+                    if (playing) pauseAutoResumedPlayback()
+                }
                 main.post {
                     if (generation != token) {
                         release(preparedController, preparedSink)
@@ -300,6 +357,7 @@ object CarPlaySessionManager {
 
     internal fun stop() {
         generation++
+        stopLinkWatchdog()
         val previousController = controller
         val previousSink = sink
         controller = null
@@ -307,9 +365,148 @@ object CarPlaySessionManager {
         sessions.clear()
         isRunning = false
         isConnected = false
+        autoPausePending = false
         statusText = "已断开连接"
         changed()
         release(previousController, previousSink)
+    }
+
+    /**
+     * 无线会话建立后监控手机是否还在网络中
+     * 蓝牙只在建立连接时用到 断开蓝牙后 CarPlay 仍走热点 因此不能用蓝牙判断
+     * 时间同步每秒一次往返 是手机在线的最可靠信号 视频帧作为补充
+     * 两者都静默超过 5 秒才判定断开 静止画面不会误判
+     */
+    private fun startLinkWatchdog(app: Context, token: Int) {
+        stopLinkWatchdog()
+        watchdogStartedAt = SystemClock.elapsedRealtime()
+        timingSignalMissingLogged = false
+        lastDiagAt = 0L
+        lastDiagRxBytes = 0L
+        lastDiagRxPackets = 0L
+        lastDiagRetransSegs = 0L
+        val watchdog = Executors.newSingleThreadScheduledExecutor { runnable ->
+            Thread(runnable, "carplay-link-watchdog").apply { isDaemon = true }
+        }
+        linkWatchdog = watchdog
+        watchdog.scheduleWithFixedDelay(
+            { runCatching { checkWirelessLink(app, token) } },
+            LINK_CHECK_INTERVAL_MILLIS,
+            LINK_CHECK_INTERVAL_MILLIS,
+            TimeUnit.MILLISECONDS,
+        )
+        watchdog.scheduleWithFixedDelay(
+            { runCatching { logLinkDiagnostics(app, token) } },
+            LINK_DIAG_INTERVAL_MILLIS,
+            LINK_DIAG_INTERVAL_MILLIS,
+            TimeUnit.MILLISECONDS,
+        )
+    }
+
+    private fun checkWirelessLink(app: Context, token: Int) {
+        if (generation != token || !isRunning || !isConnected) return
+        val timingAt = sessions.lastOrNull()?.timingPeerLastPacketAt ?: 0L
+        // 没有时间同步回包时不做判断 交给协议层超时 避免静止画面被误判
+        if (timingAt == 0L) {
+            logMissingTimingSignalOnce()
+            return
+        }
+        val lastVideoAt = sink?.lastVideoFrameAt ?: 0L
+        val silentMillis = SystemClock.elapsedRealtime() - maxOf(timingAt, lastVideoAt)
+        if (silentMillis <= LINK_LOSS_TIMEOUT_MILLIS) return
+        main.post { finishLostLink(token, app, silentMillis) }
+    }
+
+    /** 时间同步一直没回包时只记一次 便于判断检测为何没有生效 */
+    private fun logMissingTimingSignalOnce() {
+        if (timingSignalMissingLogged) return
+        if (SystemClock.elapsedRealtime() - watchdogStartedAt < TIMING_SIGNAL_LOG_DELAY_MILLIS) return
+        timingSignalMissingLogged = true
+        main.post { appendLog("未收到手机时间同步回包 断开检测交给协议层") }
+    }
+
+    /**
+     * 每 5 秒记录一次链路状态 用于区分卡顿发生在 WiFi 手机端还是解码环节
+     * 接收速率取本进程 uid 的流量差值 重传来自系统 TCP 计数 读不到时记为 0
+     */
+    private fun logLinkDiagnostics(app: Context, token: Int) {
+        if (generation != token || !isRunning || !isConnected) return
+        val now = SystemClock.elapsedRealtime()
+        val uid = app.applicationInfo.uid
+        val rxBytes = TrafficStats.getUidRxBytes(uid)
+        val rxPackets = TrafficStats.getUidRxPackets(uid)
+        val retransSegs = readTcpRetransSegs()
+        val elapsed = if (lastDiagAt == 0L) 0L else now - lastDiagAt
+        val deltaBytes = if (elapsed > 0) (rxBytes - lastDiagRxBytes).coerceAtLeast(0L) else 0L
+        val deltaPackets = if (elapsed > 0) (rxPackets - lastDiagRxPackets).coerceAtLeast(0L) else 0L
+        val deltaRetrans = if (elapsed > 0 && retransSegs != null) {
+            (retransSegs - lastDiagRetransSegs).coerceAtLeast(0L)
+        } else {
+            0L
+        }
+        lastDiagAt = now
+        lastDiagRxBytes = rxBytes
+        lastDiagRxPackets = rxPackets
+        lastDiagRetransSegs = retransSegs ?: 0L
+        val wifi = runCatching {
+            (app.getSystemService(Context.WIFI_SERVICE) as? WifiManager)?.connectionInfo
+        }.getOrNull()
+        val frequency = if (wifi != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+            wifi.frequency
+        } else {
+            0
+        }
+        val wifiText = if (wifi != null && frequency > 0) {
+            "${frequency}MHz rssi=${wifi.rssi}dBm link=${wifi.linkSpeed}Mbps"
+        } else {
+            "未加入热点"
+        }
+        val kbps = if (elapsed > 0) deltaBytes * 8 / elapsed else 0L
+        val videoSilent = sink?.lastVideoFrameAt?.takeIf { it != 0L }?.let { now - it }
+        val silenceText = if (videoSilent == null) "视频静默=-" else "视频静默=${videoSilent}ms"
+        val line = "链路诊断: wifi=$wifiText 接收=${kbps}kbps/${deltaPackets}包 重传=+$deltaRetrans $silenceText"
+        main.post { appendLog(line) }
+    }
+
+    /** 系统 TCP 重传计数 增量持续升高说明链路在丢包重传 读不到时返回 null */
+    private fun readTcpRetransSegs(): Long? {
+        val lines = runCatching { File("/proc/net/snmp").readLines() }.getOrNull() ?: return null
+        val headerIndex = lines.indexOfFirst { it.startsWith("Tcp:") }
+        if (headerIndex < 0) return null
+        val names = lines[headerIndex].removePrefix("Tcp:").trim().split(Regex("\\s+"))
+        val values = lines.getOrNull(headerIndex + 1)
+            ?.removePrefix("Tcp:")?.trim()?.split(Regex("\\s+")) ?: return null
+        val index = names.indexOf("RetransSegs")
+        if (index < 0) return null
+        return values.getOrNull(index)?.toLongOrNull()
+    }
+
+    /** iOS 在连接车机时会自动续播上次的音频 这里在检测到开始播放后暂停一次 */
+    private fun pauseAutoResumedPlayback() {
+        if (!autoPausePending) return
+        val session = sessions.lastOrNull() ?: return
+        autoPausePending = false
+        commands.execute { session.sendMedia(CarPlayMediaButton.PAUSE) }
+        main.post { appendLog("已暂停手机自动续播的音乐") }
+    }
+
+    private fun finishLostLink(token: Int, app: Context, silentMillis: Long) {
+        if (generation != token || !isRunning || !isConnected) return
+        stop()
+        statusText = "连接已断开"
+        appendLog("$statusText: 手机无响应 ${silentMillis / 1000} 秒")
+        app.stopService(Intent(app, CarPlaySessionService::class.java))
+    }
+
+    private fun stopLinkWatchdog() {
+        linkWatchdog?.shutdownNow()
+        linkWatchdog = null
+    }
+
+    /** 只有会话真正建立才写入历史 供首页快速连接使用 */
+    private fun rememberConnectedPhone(app: Context) {
+        val address = DiPlayPreferences.phoneAddress(app) ?: return
+        DiPlayPreferences.recordConnectedPhone(app, address, DiPlayPreferences.phoneName(app))
     }
 
     private fun release(previousController: CarPlayController?, previousSink: AndroidMediaSink?) {
@@ -334,6 +531,36 @@ object CarPlaySessionManager {
         statusText = message
         appendLog(message)
         context.stopService(Intent(context, CarPlaySessionService::class.java))
+    }
+
+    /** 主画面视频参数是否已到达 自动进入投屏前等待它 避免视频流尚未协商就进入 */
+    fun isVideoReady(): Boolean = (sink?.firstVideoConfigAt ?: 0L) != 0L
+
+    /** 记录自动进入投屏的决定 包含是否等到视频流 */
+    fun noteScreenEntry(videoReady: Boolean, waitedMillis: Long) {
+        if (!isRunning) return
+        screenEntryAt = SystemClock.elapsedRealtime()
+        val reason = if (videoReady) "视频流已就绪" else "等待视频流 ${waitedMillis}ms 超时"
+        appendLog("连接时间线: $reason, 进入投屏=${timelineMillis(screenEntryAt)}")
+    }
+
+    fun noteScreenCreated() {
+        if (!isRunning || screenEntryAt == 0L || screenCreatedAt != 0L) return
+        screenCreatedAt = SystemClock.elapsedRealtime()
+        appendLog("连接时间线: 投屏页创建=${timelineMillis(screenCreatedAt)}")
+    }
+
+    fun noteSurfaceReady() {
+        if (!isRunning || screenEntryAt == 0L || surfaceReadyAt != 0L) return
+        surfaceReadyAt = SystemClock.elapsedRealtime()
+        appendLog("连接时间线: Surface 就绪=${timelineMillis(surfaceReadyAt)}")
+    }
+
+    fun noteFirstTextureUpdated() {
+        // TextureView 创建和布局时也会回调 此时还没有任何视频帧 必须等首帧真正渲染后再记录
+        if (!isRunning || screenEntryAt == 0L || firstFrameRenderedAt == 0L || firstTextureUpdatedAt != 0L) return
+        firstTextureUpdatedAt = SystemClock.elapsedRealtime()
+        appendLog(timelineSummary())
     }
 
     fun attachSurface(value: Surface) {
@@ -370,13 +597,31 @@ object CarPlaySessionManager {
         changed()
     }
 
+    /** 距离连接开始的毫秒数 未记录时显示占位符 */
+    private fun timelineMillis(at: Long): String {
+        if (at == 0L || connectStartedAt == 0L) return "-"
+        return "${at - connectStartedAt}ms"
+    }
+
+    /** 首次显示画面后汇总各阶段耗时 便于判断卡顿发生在哪一段 */
+    private fun timelineSummary(): String {
+        return "连接时间线汇总: 会话=${timelineMillis(sessionActiveAt)} " +
+            "视频参数=${timelineMillis(sink?.firstVideoConfigAt ?: 0L)} " +
+            "首包=${timelineMillis(sink?.firstVideoFrameAt ?: 0L)} " +
+            "进入=${timelineMillis(screenEntryAt)} " +
+            "页面=${timelineMillis(screenCreatedAt)} " +
+            "Surface=${timelineMillis(surfaceReadyAt)} " +
+            "首帧=${timelineMillis(firstFrameRenderedAt)} " +
+            "显示=${timelineMillis(firstTextureUpdatedAt)}"
+    }
+
     private fun changed() {
         main.removeCallbacks(notifyListeners)
         main.postDelayed(notifyListeners, 100)
     }
 
     private fun loadBrandIcon(context: Context): AirPlayIcon {
-        val bitmap = android.graphics.BitmapFactory.decodeResource(context.resources, R.drawable.app_logo)
+        val bitmap = android.graphics.BitmapFactory.decodeResource(context.resources, R.drawable.carplay_oem_icon)
             ?: error("无法读取品牌图标")
         return try {
             val bytes = java.io.ByteArrayOutputStream()

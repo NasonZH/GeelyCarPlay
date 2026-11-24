@@ -16,6 +16,7 @@ import android.provider.Settings
 import android.net.Uri
 import com.shilapi.xcertplay.AirPlayPersistence
 import com.shilapi.xcertplay.DiPlayPreferences
+import com.shilapi.xcertplay.media.MediaAudioBuffer
 import com.shilapi.xcertplay.orchestration.MfiTarget
 import com.geely.carplay.ui.widget.IconView
 import com.geely.carplay.ui.widget.SettingRowView
@@ -303,7 +304,8 @@ class SettingsActivity : Activity() {
     private fun choiceIndex(title: Int): Int = when (title) {
         R.string.settings_ui_scale -> intArrayOf(85, 100, 115).indexOf(AirPlayPersistence.loadUiScalePercent(this)).coerceAtLeast(0)
         R.string.settings_resolution -> if (AirPlayPersistence.loadDisplayScaleTenths(this) < 10) 2 else 0
-        R.string.settings_music_buffer -> intArrayOf(150, 300, 500).indexOf(AirPlayPersistence.loadMediaBufferMillis(this)).coerceAtLeast(0)
+        R.string.settings_music_buffer -> MediaAudioBuffer.presets
+            .indexOf(AirPlayPersistence.loadMediaBufferMillis(this)).coerceAtLeast(0)
         R.string.settings_frame_rate -> if (AirPlayPersistence.loadFps(this) == 60) 1 else 0
         R.string.settings_media_stream -> AirPlayPersistence.loadMediaAudioChannel(this)
         R.string.settings_nav_stream -> AirPlayPersistence.loadNavigationAudioChannel(this)
@@ -315,7 +317,7 @@ class SettingsActivity : Activity() {
         when (title) {
             R.string.settings_ui_scale -> AirPlayPersistence.saveUiScalePercent(this, intArrayOf(85, 100, 115)[index])
             R.string.settings_resolution -> AirPlayPersistence.saveDisplayScaleTenths(this, if (index == 2) 7 else 10)
-            R.string.settings_music_buffer -> AirPlayPersistence.saveMediaBufferMillis(this, intArrayOf(150, 300, 500)[index])
+            R.string.settings_music_buffer -> AirPlayPersistence.saveMediaBufferMillis(this, MediaAudioBuffer.presets[index])
             R.string.settings_frame_rate -> AirPlayPersistence.saveFps(this, if (index == 1) 60 else 30)
             R.string.settings_media_stream -> AirPlayPersistence.saveMediaAudioChannel(this, index)
             R.string.settings_nav_stream -> AirPlayPersistence.saveNavigationAudioChannel(this, index)

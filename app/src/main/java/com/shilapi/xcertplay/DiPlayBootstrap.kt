@@ -61,6 +61,9 @@ internal object DiPlayBootstrap {
 }
 
 internal object DiPlayPreferences {
+    private const val KEY_PHONE_HISTORY = "phone_history"
+    private const val PHONE_HISTORY_LIMIT = 5
+
     private fun prefs(context: Context) = context.getSharedPreferences("diplay", Context.MODE_PRIVATE)
     fun phoneAddress(context: Context): String? = prefs(context).getString("phone_address", null)
     fun phoneName(context: Context): String = prefs(context).getString("phone_name", null) ?: "尚未选择"
@@ -74,8 +77,51 @@ internal object DiPlayPreferences {
             .putBoolean("phone_uses_geely_h52_bluetooth", geelyBluetooth)
             .apply()
     }
+
+    /** 连接成功过的设备 最近连接时间倒序 最多 5 台 */
+    fun phoneHistory(context: Context): List<PhoneRecord> {
+        val raw = prefs(context).getString(KEY_PHONE_HISTORY, null) ?: return emptyList()
+        return runCatching {
+            val array = org.json.JSONArray(raw)
+            val records = mutableListOf<PhoneRecord>()
+            for (index in 0 until array.length()) {
+                val item = array.optJSONObject(index) ?: continue
+                val address = item.optString("address")
+                if (address.isEmpty()) continue
+                records += PhoneRecord(
+                    address = address,
+                    name = item.optString("name", address),
+                    lastConnectedAt = item.optLong("last_connected_at"),
+                )
+            }
+            records
+        }.getOrDefault(emptyList())
+    }
+
+    fun recordConnectedPhone(context: Context, address: String, name: String) {
+        val records = phoneHistory(context)
+            .filterNot { it.address.equals(address, ignoreCase = true) }
+            .toMutableList()
+        records.add(0, PhoneRecord(address, name, System.currentTimeMillis()))
+        val array = org.json.JSONArray()
+        for (record in records.take(PHONE_HISTORY_LIMIT)) {
+            array.put(org.json.JSONObject()
+                .put("address", record.address)
+                .put("name", record.name)
+                .put("last_connected_at", record.lastConnectedAt))
+        }
+        prefs(context).edit().putString(KEY_PHONE_HISTORY, array.toString()).apply()
+    }
+
     fun autoConnect(context: Context) = prefs(context).getBoolean("auto_connect", false)
     fun saveAutoConnect(context: Context, value: Boolean) {
         prefs(context).edit().putBoolean("auto_connect", value).apply()
     }
 }
+
+/** 连接成功过的设备记录 */
+internal data class PhoneRecord(
+    val address: String,
+    val name: String,
+    val lastConnectedAt: Long,
+)

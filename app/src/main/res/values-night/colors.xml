@@ -13,12 +13,14 @@
     <color name="text_secondary">#9AA7B6</color>
     <color name="text_tertiary">#6D7A88</color>
 
-    <color name="brand">#2E8BFF</color>
+    <color name="brand">#3B8CFF</color>
     <color name="brand_deep">#0B5CD6</color>
     <color name="ok">#35D08A</color>
+    <color name="warn">#FFB74D</color>
 
-    <color name="brand_soft">#262E8BFF</color>
+    <color name="brand_soft">#263B8CFF</color>
     <color name="ok_soft">#1F35D08A</color>
+    <color name="warn_soft">#26FFB74D</color>
     <color name="row_press">#14FFFFFF</color>
 
     <color name="preview_screen">#070A11</color>

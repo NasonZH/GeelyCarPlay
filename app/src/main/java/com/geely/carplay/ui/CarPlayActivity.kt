@@ -1,6 +1,7 @@
 package com.geely.carplay.ui
 
 import android.app.Activity
+import android.content.Intent
 import android.graphics.SurfaceTexture
 import android.os.Bundle
 import android.view.Surface
@@ -15,7 +16,8 @@ class CarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private lateinit var video: TextureView
     private var surface: Surface? = null
     private var frameAvailable = false
-    private val observer: () -> Unit = { renderStatus() }
+    private var sawConnected = false
+    private val observer: () -> Unit = { onSessionChanged() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         ThemeStore.load(this)
@@ -32,6 +34,7 @@ class CarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             if (event.actionMasked == android.view.MotionEvent.ACTION_UP) video.performClick()
             true
         }
+        CarPlaySessionManager.noteScreenCreated()
     }
 
     override fun onResume() {
@@ -51,6 +54,7 @@ class CarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
         frameAvailable = false
         renderStatus()
+        CarPlaySessionManager.noteSurfaceReady()
         val value = Surface(texture)
         surface = value
         CarPlaySessionManager.attachSurface(value)
@@ -61,6 +65,7 @@ class CarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
     override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) = Unit
     override fun onSurfaceTextureUpdated(texture: SurfaceTexture) {
+        CarPlaySessionManager.noteFirstTextureUpdated()
         if (frameAvailable) return
         frameAvailable = true
         renderStatus()
@@ -82,6 +87,27 @@ class CarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         frameAvailable = false
         CarPlaySessionManager.detachSurface(previous)
         previous.release()
+    }
+
+    /**
+     * 会话断开后回到首页 只有本页确认过连接成功才触发
+     * 未连接时手动进入投屏页查看 以及连接失败时 都停留在本页
+     */
+    private fun onSessionChanged() {
+        if (CarPlaySessionManager.isConnected) {
+            sawConnected = true
+        } else if (sawConnected) {
+            returnToHome()
+            return
+        }
+        renderStatus()
+    }
+
+    private fun returnToHome() {
+        if (isFinishing) return
+        startActivity(Intent(this, HomeActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+        finish()
     }
 
     private fun renderStatus() {

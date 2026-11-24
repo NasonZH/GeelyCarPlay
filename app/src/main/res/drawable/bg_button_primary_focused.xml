@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 主按钮获得焦点：保留渐变，用白色描边与普通态区分 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <gradient
+        android:angle="0"
+        android:startColor="@color/brand"
+        android:endColor="@color/brand_deep" />
+    <corners android:radius="@dimen/radius_button" />
+    <stroke android:width="2dp" android:color="@color/white" />
+</shape>

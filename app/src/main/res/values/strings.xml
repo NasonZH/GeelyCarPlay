@@ -10,6 +10,12 @@
     <!-- 首页 -->
     <string name="home_state_connected">CarPlay 已连接</string>
     <string name="btn_connect_phone">连接手机</string>
+    <string name="btn_quick_connect">快速连接</string>
+    <string name="quick_connect_no_history">暂无连接记录，请先连接一次手机</string>
+    <string name="quick_connect_offline">上次连接的手机不在线，请先开启手机蓝牙</string>
+    <string name="home_need_hotspot_bluetooth">请先手动打开车机热点和蓝牙</string>
+    <string name="home_need_hotspot">请先手动打开车机热点</string>
+    <string name="home_need_bluetooth">请先手动打开蓝牙</string>
     <string name="btn_enter_carplay">进入 CarPlay</string>
     <string name="btn_disconnect">断开 CarPlay</string>
     <string name="btn_exit_to_head_unit">退出应用</string>
@@ -18,14 +24,14 @@
     <string name="exit_confirm">确认退出</string>
     <string name="exit_closing">正在断开连接并退出…</string>
     <string name="btn_back">返回</string>
-    <string name="btn_hotspot_settings">打开车机热点设置</string>
-    <string name="home_wireless_title">无线 CarPlay</string>
     <string name="home_wireless_state">尚未连接</string>
-    <string name="home_wireless_hint">车机热点 · 保持车机热点、蓝牙和 iPhone 的 Wi-Fi 开启。</string>
+    <string name="home_wireless_hint">打开车机热点和蓝牙，再点下方按钮连接手机。</string>
     <string name="home_settings_title">设置</string>
     <string name="home_settings_hint">按需调整显示、音频和连接选项。</string>
     <string name="home_hotspot_state">正在读取热点</string>
     <string name="status_bluetooth">正在读取蓝牙</string>
+    <string name="home_transport_system">系统蓝牙</string>
+    <string name="home_transport_geely">原厂蓝牙</string>
 
     <!-- 连接页 -->
     <string name="connect_title">连接 CarPlay</string>
@@ -51,11 +57,29 @@
     <string name="connect_hotspot_pwd">正在读取…</string>
     <string name="connect_hotspot_on">正在读取车机热点配置…</string>
     <string name="connect_found_devices">已配对的设备</string>
+    <string name="connect_phone_loading">正在读取已配对设备</string>
+    <string name="connect_phone_no_iphone">未识别到 iPhone，已显示全部已配对设备</string>
+    <string name="connect_phone_empty">尚无配对设备，请先在车机蓝牙设置中配对 iPhone</string>
+    <string name="connect_phone_online">在线</string>
+    <string name="connect_phone_paired">已配对</string>
+    <string name="connect_phone_open_bluetooth">点击打开蓝牙设置</string>
+    <string name="connect_phone_no_bluetooth">车机蓝牙不可用</string>
+    <string name="connect_phone_bluetooth_off">蓝牙未开启，请先开启蓝牙并配对 iPhone</string>
+    <string name="connect_phone_read_failed">读取设备失败</string>
+    <string name="connect_phone_unnamed">已配对设备</string>
     <string name="connect_linking_hint">保持 iPhone 解锁，并在提示时允许使用 CarPlay。</string>
     <string name="connect_success">连接成功</string>
 
     <string name="connect_wireless_meta">蓝牙 + 车机热点</string>
     <string name="connect_usb_meta">数据线直连 · 即插即用</string>
+    <string name="connect_prepare_title">连接前准备</string>
+    <string name="connect_wireless_prepare_1">车机热点已开启</string>
+    <string name="connect_wireless_prepare_2">车机蓝牙已开启</string>
+    <string name="connect_wireless_prepare_3">iPhone 已打开 Wi-Fi 与蓝牙</string>
+    <string name="connect_usb_prepare_1">使用数据线，不是充电线</string>
+    <string name="connect_usb_prepare_2">首次连接需在 iPhone 上点“信任”</string>
+    <string name="connect_wireless_scene">适合日常使用，上车即连</string>
+    <string name="connect_usb_scene">适合首次配对或无线受干扰时</string>
     <string name="connect_iphone_action">连接</string>
     <string name="connect_usb_mode">USB 有线</string>
     <string name="connect_step_state_running">进行中</string>
@@ -68,17 +92,18 @@
     <string name="connect_hint_link">保持 iPhone 解锁，并在提示时允许使用 CarPlay。</string>
 
     <string name="home_last_device">上次连接</string>
+    <string name="home_current_device">当前连接</string>
     <string name="home_last_device_state">尚未选择</string>
+    <string name="home_device_offline">%1$s · 未连接</string>
     <string name="settings_theme">主题</string>
-    <string name="settings_theme_desc">深色适合夜间, 浅色适合白天, 切换后重建界面并同步 CarPlay。</string>
+    <string name="settings_theme_desc">深色适合夜间，浅色适合白天，切换后重建界面并同步 CarPlay。</string>
     <string name="theme_dark">深色</string>
     <string name="theme_light">浅色</string>
     <string name="carplay_ready_hint">CarPlay 已就绪，可进入投屏画面。</string>
 
     <!-- 设置页 -->
     <string name="settings_title">设置</string>
-    <string name="settings_subtitle">按你的习惯设置。</string>
-    <string name="settings_note">连接、显示和音频参数在重新连接后生效, 主题立即生效。</string>
+    <string name="settings_note">连接、显示和音频参数在重新连接后生效，主题立即生效。</string>
     <string name="settings_cat_connection">连接设置</string>
     <string name="settings_cat_display">显示与性能</string>
     <string name="settings_cat_audio">音频</string>
@@ -91,7 +116,7 @@
     <string name="settings_boot_start">车机启动后打开</string>
     <string name="settings_boot_start_desc">是否可用取决于车机的启动设置。</string>
     <string name="settings_pick_iphone">选择 iPhone</string>
-    <string name="settings_pick_iphone_desc">进入连接引导, 选择车机已配对的 iPhone。</string>
+    <string name="settings_pick_iphone_desc">进入连接引导，选择车机已配对的 iPhone。</string>
     <string name="row_arrow">›</string>
 
     <string name="settings_open_connection">打开连接设置</string>
@@ -144,15 +169,15 @@
     <string name="settings_authentication">MFi 认证</string>
     <string name="settings_authentication_desc">选择本地资产、USB 设备、I2C 或远程认证</string>
     <string name="settings_call_mode">通话方式</string>
-    <string name="settings_call_mode_desc">车机麦克风模式需要 Root, 通话期间会暂停原厂语音服务</string>
+    <string name="settings_call_mode_desc">车机麦克风模式需要 Root，通话期间会暂停原厂语音服务</string>
     <string name="hotspot_manual_title">填写热点信息</string>
     <string name="hotspot_edit">修改热点信息</string>
-    <string name="hotspot_manual_help">先在手机系统设置中开启热点, 填写相同的名称和密码。此处只保存连接信息, 不修改系统热点。</string>
+    <string name="hotspot_manual_help">先在手机系统设置中开启热点，填写相同的名称和密码。此处只保存连接信息，不修改系统热点。</string>
     <string name="hotspot_name_hint">与系统热点名称完全一致</string>
-    <string name="hotspot_password_hint">8–63 个字符, 无密码热点请留空</string>
+    <string name="hotspot_password_hint">8–63 个字符，无密码热点请留空</string>
     <string name="hotspot_save">保存</string>
-    <string name="hotspot_saved_hint">热点信息已保存, 请确认系统热点已开启后继续连接。</string>
-    <string name="hotspot_manual_hint">请先开启系统热点, 再点击填写热点信息。</string>
+    <string name="hotspot_saved_hint">热点信息已保存，请确认系统热点已开启后继续连接。</string>
+    <string name="hotspot_manual_hint">请先开启系统热点，再点击填写热点信息。</string>
     <string name="hotspot_not_configured">尚未配置</string>
     <string name="hotspot_open_network">无密码热点</string>
 </resources>

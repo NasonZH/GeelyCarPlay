@@ -105,6 +105,9 @@ class AirPlaySession(
 
     fun syncedNtp(): BigInteger = ntp.syncedNtp()
 
+    /** 最近一次收到 iPhone 时间同步包的时间 与蓝牙无关的对端存活信号 */
+    val timingPeerLastPacketAt: Long get() = ntp.lastPeerPacketAt
+
     internal fun logDebug(message: String) = debugLog(message)
 
     internal fun videoFrameRendered() {

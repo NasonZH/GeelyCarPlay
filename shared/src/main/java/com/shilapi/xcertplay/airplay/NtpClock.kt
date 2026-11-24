@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay.airplay
 
+import android.os.SystemClock
 import java.io.Closeable
 import java.math.BigInteger
 import java.net.DatagramPacket
@@ -7,7 +8,6 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.concurrent.atomic.AtomicBoolean
-
 /**
  * CarPlay timing-port clock sync.
  *
@@ -25,7 +25,6 @@ class NtpClock : Closeable {
     private var receiver: Thread? = null
     private var sender: Thread? = null
     private var peer: InetSocketAddress? = null
-
     private var clockOffsetNs = wallClockNtpOffsetNs(System.nanoTime())
     private val delays = DoubleArray(DELAY_WINDOW) { Double.POSITIVE_INFINITY }
     private var delayIndex = 0
@@ -34,6 +33,10 @@ class NtpClock : Closeable {
     private var pickOffset = 0.0
     private var pendingT1: BigInteger? = null
     private var synced = false
+
+    /** 最近一次收到 iPhone 时间同步包的时间 无线断开检测用它代替蓝牙状态 */
+    @Volatile var lastPeerPacketAt = 0L
+        private set
 
     fun listen(): Int {
         check(!running.getAndSet(true)) { "NtpClock is already running" }
@@ -108,6 +111,7 @@ class NtpClock : Closeable {
             val message = packet.data.copyOf(packet.length)
             val address = packet.address
             if (message.size >= NTP_PACKET_BYTES && address != null) {
+                if (peer?.address == address) lastPeerPacketAt = SystemClock.elapsedRealtime()
                 handleMessage(message, InetSocketAddress(address, packet.port))
             }
         }

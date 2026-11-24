@@ -1269,6 +1269,7 @@ class CarPlayController(
             override fun onVideoFrameRendered(session: AirPlaySession) {
                 if (isStaleWirelessRun(generation) || activeSession !== session) return
                 wirelessConnectionProof.rendered(generation, session)
+                uiListener?.onVideoFrameRendered(session)
             }
 
             // Passed on explicitly: without these the car's video player never opened over Wi-Fi.

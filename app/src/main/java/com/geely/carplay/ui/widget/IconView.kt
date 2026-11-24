@@ -275,6 +275,6 @@ class IconView(context: Context, attrs: AttributeSet? = null) : View(context, at
 
     private companion object {
         const val VIEWPORT = 24f
-        const val STROKE_WIDTH = 1.75f
+        const val STROKE_WIDTH = 2f
     }
 }

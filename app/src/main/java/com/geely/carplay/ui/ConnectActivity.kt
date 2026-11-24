@@ -4,6 +4,9 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.view.View
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -13,6 +16,7 @@ import android.widget.TextView
 import android.widget.Toast
 import com.geely.carplay.ui.widget.IconView
 import android.app.AlertDialog
+import android.bluetooth.BluetoothClass
 import android.bluetooth.BluetoothManager
 import android.net.VpnService
 import android.provider.Settings
@@ -22,7 +26,6 @@ import com.shilapi.xcertplay.network.CarHotspotFailure
 import com.shilapi.xcertplay.network.CarHotspotReadResult
 import com.shilapi.xcertplay.network.CarHotspotTools
 import com.shilapi.xcertplay.transport.AnwBluetoothBackend
-import com.shilapi.xcertplay.transport.AnwPairedDevice
 
 /**
  * CarPlay 连接页：选择方式、确认热点、挑选 iPhone、建立连接
@@ -34,15 +37,38 @@ class ConnectActivity : Activity() {
     private var stepIndex = STEP_CHOOSE
     private var connected = false
     private var autoEntered = false
+    private var screenEntered = false
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var videoWaitStartedAt = 0L
+    private var videoWaitDeadline = 0L
     private var phoneLookupGeneration = 0
     private var hotspotLookupGeneration = 0
     private var hotspotReadFailure: CarHotspotFailure? = null
     private val stepHolders = mutableListOf<StepHolder>()
+    private val awaitVideoRunnable = object : Runnable {
+        override fun run() {
+            if (isFinishing || isDestroyed || screenEntered) return
+            if (!CarPlaySessionManager.isConnected || CarPlaySessionManager.isExiting) return
+            if (CarPlaySessionManager.isVideoReady()) {
+                enterCarPlay(videoReady = true)
+                return
+            }
+            if (SystemClock.elapsedRealtime() >= videoWaitDeadline) {
+                enterCarPlay(videoReady = false)
+                return
+            }
+            mainHandler.postDelayed(this, VIDEO_READY_POLL_MILLIS)
+        }
+    }
     private val connectionObserver: () -> Unit = {
         val wasConnected = connected
         connected = CarPlaySessionManager.isConnected
         if (CarPlaySessionManager.isRunning || connected) stepIndex = STEP_LINK
-        if (!connected) autoEntered = false
+        if (!connected) {
+            autoEntered = false
+            screenEntered = false
+            mainHandler.removeCallbacks(awaitVideoRunnable)
+        }
         if (connected && !wasConnected) autoEnterCarPlay()
         render()
         renderLogs()
@@ -61,16 +87,19 @@ class ConnectActivity : Activity() {
         findViewById<View>(R.id.connect_back).setOnClickListener { finish() }
         findViewById<View>(R.id.choose_wireless).setOnClickListener { selectMode(Mode.WIRELESS) }
         findViewById<View>(R.id.choose_usb).setOnClickListener { selectMode(Mode.USB) }
-        findViewById<View>(R.id.hotspot_settings_button).setOnClickListener { openSystemSettings(Settings.ACTION_WIRELESS_SETTINGS) }
         findViewById<View>(R.id.hotspot_manual_button).setOnClickListener { editHotspot() }
         findViewById<View>(R.id.connect_action).setOnClickListener { onActionClick() }
 
         buildSteps()
         render()
+        if (intent.getBooleanExtra(EXTRA_QUICK_CONNECT, false) && !CarPlaySessionManager.isRunning) {
+            stepTo(STEP_LINK)
+        }
     }
 
     override fun onResume() {
         super.onResume()
+        if (autoEntered && !screenEntered && CarPlaySessionManager.isConnected) beginVideoWait()
         CarPlaySessionManager.observe(connectionObserver)
         if (stepIndex == STEP_PHONE) buildIphoneList()
         if (stepIndex == STEP_HOTSPOT) refreshHotspot()
@@ -79,6 +108,7 @@ class ConnectActivity : Activity() {
     override fun onPause() {
         phoneLookupGeneration++
         hotspotLookupGeneration++
+        mainHandler.removeCallbacks(awaitVideoRunnable)
         CarPlaySessionManager.removeObserver(connectionObserver)
         super.onPause()
     }
@@ -102,7 +132,8 @@ class ConnectActivity : Activity() {
         val list = findViewById<LinearLayout>(R.id.connect_iphone_list)
         list.removeAllViews()
         val loading = TextView(this).apply {
-            text = "正在读取已配对的设备…"
+            text = getString(R.string.connect_phone_loading)
+            setTextColor(color(R.color.text_secondary))
             setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, resources.getDimension(R.dimen.text_body))
         }
         list.addView(loading)
@@ -111,36 +142,85 @@ class ConnectActivity : Activity() {
         val geely = AirPlayPersistence.loadGeelyBluetoothConnectionEnabled(this)
         Thread({
             val result = runCatching {
-                if (geely) AnwBluetoothBackend(app).pairedDevices() else {
+                if (geely) {
+                    AnwBluetoothBackend(app).pairedDevices().map {
+                        PairedPhone(it.address, it.name, isOnline = it.address.equals(DiPlayPreferences.phoneAddress(app), ignoreCase = true))
+                    }
+                } else {
                     val adapter = (app.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
-                        ?: error("车机蓝牙不可用, 可在设置中选择吉利原厂蓝牙")
-                    check(adapter.isEnabled) { "请先开启蓝牙并配对 iPhone" }
-                    adapter.bondedDevices.map { AnwPairedDevice(it.address, it.name ?: "已配对设备") }
+                        ?: error(getString(R.string.connect_phone_no_bluetooth))
+                    check(adapter.isEnabled) { getString(R.string.connect_phone_bluetooth_off) }
+                    adapter.bondedDevices.orEmpty()
+                        .map {
+                            PairedPhone(
+                                address = it.address,
+                                name = it.name ?: getString(R.string.connect_phone_unnamed),
+                                isPhone = it.bluetoothClass?.majorDeviceClass == BluetoothClass.Device.Major.PHONE,
+                                isOnline = isBluetoothConnected(it) ||
+                                    (CarPlaySessionManager.isRunning &&
+                                        it.address.equals(DiPlayPreferences.phoneAddress(app), ignoreCase = true)),
+                            )
+                        }
                 }
             }
             runOnUiThread {
                 if (token != phoneLookupGeneration || isFinishing || isDestroyed) return@runOnUiThread
                 list.removeAllViews()
-                result.fold(onSuccess = { devices ->
-                    for (device in devices.sortedBy { it.name }) {
-                        val row = layoutInflater.inflate(R.layout.item_iphone, list, false)
-                        row.findViewById<TextView>(R.id.iphone_name).text = device.name
-                        row.findViewById<TextView>(R.id.iphone_state).text = "已配对 · ${device.address.takeLast(5)}"
-                        row.setOnClickListener {
-                            DiPlayPreferences.savePhone(this, device.address, device.name, geely)
-                            stepTo(STEP_LINK)
-                        }
-                        list.addView(row)
-                    }
-                    if (devices.isEmpty()) addPhoneHint(list, "尚无配对设备, 请先在车机蓝牙设置中配对 iPhone")
-                }, onFailure = { addPhoneHint(list, it.message ?: "读取设备失败") })
+                result.fold(
+                    onSuccess = { devices -> showPhoneList(list, devices, geely) },
+                    onFailure = { addPhoneHint(list, it.message ?: getString(R.string.connect_phone_read_failed)) },
+                )
             }
         }, "carplay-phone-list").start()
     }
 
+    /**
+     * 系统蓝牙按设备类别筛出手机类 名称含 iPhone 时同样纳入 覆盖被改名的 iPhone
+     * 原厂蓝牙配对列表本身只含目标设备 不再筛选
+     * 识别不到时回退显示全部 避免完全选不到设备
+     */
+    private fun showPhoneList(list: LinearLayout, devices: List<PairedPhone>, geely: Boolean) {
+        val candidates = if (geely) {
+            devices
+        } else {
+            devices.filter { it.isPhone || it.name.contains(IPHONE_NAME, ignoreCase = true) }
+        }
+        val shown = if (candidates.isEmpty()) devices else candidates
+
+        if (candidates.isEmpty() && devices.isNotEmpty()) {
+            list.addView(TextView(this).apply {
+                text = getString(R.string.connect_phone_no_iphone)
+                setTextColor(color(R.color.text_tertiary))
+                setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, resources.getDimension(R.dimen.text_caption))
+            })
+        }
+        if (shown.isEmpty()) {
+            addPhoneHint(list, getString(R.string.connect_phone_empty))
+            return
+        }
+
+        val sorted = shown.sortedWith(
+            compareByDescending<PairedPhone> { it.isOnline }.thenBy { it.name },
+        )
+        for (device in sorted) {
+            val row = layoutInflater.inflate(R.layout.item_iphone, list, false)
+            row.findViewById<TextView>(R.id.iphone_name).text = device.name
+            val online = device.isOnline
+            row.findViewById<TextView>(R.id.iphone_state).apply {
+                setText(if (online) R.string.connect_phone_online else R.string.connect_phone_paired)
+                setTextColor(color(if (online) R.color.ok else R.color.text_tertiary))
+            }
+            row.setOnClickListener {
+                DiPlayPreferences.savePhone(this, device.address, device.name, geely)
+                stepTo(STEP_LINK)
+            }
+            list.addView(row)
+        }
+    }
+
     private fun addPhoneHint(list: LinearLayout, message: String) {
         list.addView(TextView(this).apply {
-            text = "$message\n点击打开蓝牙设置"
+            text = "$message\n${getString(R.string.connect_phone_open_bluetooth)}"
             setTextColor(color(R.color.text_primary))
             setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, resources.getDimension(R.dimen.text_body))
             val padding = resources.getDimensionPixelSize(R.dimen.gap_md)
@@ -148,6 +228,18 @@ class ConnectActivity : Activity() {
             setOnClickListener { openSystemSettings(Settings.ACTION_BLUETOOTH_SETTINGS) }
         })
     }
+
+    private class PairedPhone(
+        val address: String,
+        val name: String,
+        val isPhone: Boolean = false,
+        val isOnline: Boolean = false,
+    )
+
+    /** 蓝牙链路是否已连接 用隐藏方法读取 与控制器中的判断保持一致 */
+    private fun isBluetoothConnected(device: android.bluetooth.BluetoothDevice): Boolean = runCatching {
+        android.bluetooth.BluetoothDevice::class.java.getMethod("isConnected").invoke(device) as? Boolean == true
+    }.getOrDefault(false)
 
     private fun refreshHotspot() {
         val token = ++hotspotLookupGeneration
@@ -343,20 +435,17 @@ class ConnectActivity : Activity() {
 
     private fun renderAction() {
         val actionView = findViewById<View>(R.id.connect_action)
-        val actionIconView = findViewById<IconView>(R.id.connect_action_icon)
         val actionLabelView = findViewById<TextView>(R.id.connect_action_label)
         val hintView = findViewById<TextView>(R.id.connect_action_hint)
 
         when (stepIndex) {
             STEP_CHOOSE -> {
                 actionView.visibility = View.VISIBLE
-                actionIconView.setIcon(IconView.Icon.ARROW_RIGHT, color(R.color.white))
                 actionLabelView.setText(R.string.connect_next)
                 hintView.setText(R.string.connect_hint_choose)
             }
             STEP_HOTSPOT -> {
                 actionView.visibility = View.VISIBLE
-                actionIconView.setIcon(IconView.Icon.ARROW_RIGHT, color(R.color.white))
                 actionLabelView.setText(R.string.connect_next)
                 hintView.setText(R.string.connect_hint_hotspot)
             }
@@ -367,12 +456,6 @@ class ConnectActivity : Activity() {
             else -> {
                 actionView.visibility = View.VISIBLE
                 val connecting = CarPlaySessionManager.isRunning && !connected
-                val icon = when {
-                    connected -> IconView.Icon.PLAY
-                    connecting -> IconView.Icon.POWER
-                    else -> IconView.Icon.REFRESH
-                }
-                actionIconView.setIcon(icon, color(R.color.white))
                 actionLabelView.setText(when {
                     connected -> R.string.btn_enter_carplay
                     connecting -> R.string.connect_cancel
@@ -422,6 +505,31 @@ class ConnectActivity : Activity() {
     private fun autoEnterCarPlay() {
         if (autoEntered || CarPlaySessionManager.isExiting) return
         autoEntered = true
+        beginVideoWait()
+    }
+
+    /**
+     * 等待主画面视频参数到达再进入 避免视频流还没协商就创建投屏页
+     * 超时后仍然进入 防止音频或其他异常场景卡在连接页
+     */
+    private fun beginVideoWait() {
+        mainHandler.removeCallbacks(awaitVideoRunnable)
+        videoWaitStartedAt = SystemClock.elapsedRealtime()
+        videoWaitDeadline = videoWaitStartedAt + VIDEO_READY_TIMEOUT_MILLIS
+        if (CarPlaySessionManager.isVideoReady()) {
+            enterCarPlay(videoReady = true)
+            return
+        }
+        mainHandler.postDelayed(awaitVideoRunnable, VIDEO_READY_POLL_MILLIS)
+    }
+
+    private fun enterCarPlay(videoReady: Boolean) {
+        if (screenEntered || isFinishing || isDestroyed) return
+        if (!CarPlaySessionManager.isConnected || CarPlaySessionManager.isExiting) return
+        screenEntered = true
+        mainHandler.removeCallbacks(awaitVideoRunnable)
+        val waitedMillis = SystemClock.elapsedRealtime() - videoWaitStartedAt
+        CarPlaySessionManager.noteScreenEntry(videoReady, waitedMillis)
         startCarPlay()
     }
 
@@ -486,14 +594,21 @@ class ConnectActivity : Activity() {
 
     companion object {
         private const val EXTRA_MODE = "extra_mode"
+        internal const val EXTRA_QUICK_CONNECT = "quick_connect"
         private const val MODE_WIRELESS = "wireless"
         private const val MODE_USB = "usb"
         private const val VPN_REQUEST = 101
+
+        /** 自动进入投屏前等待视频参数的最长时间 */
+        private const val VIDEO_READY_TIMEOUT_MILLIS = 3_000L
+        private const val VIDEO_READY_POLL_MILLIS = 100L
 
         private const val STEP_CHOOSE = 0
         private const val STEP_HOTSPOT = 1
         private const val STEP_PHONE = 2
         private const val STEP_LINK = 3
+
+        private const val IPHONE_NAME = "iPhone"
 
         private val STEP_ICONS = arrayOf(
             IconView.Icon.SLIDERS,

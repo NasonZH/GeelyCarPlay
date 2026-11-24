@@ -9,6 +9,7 @@ import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.os.Build
 import android.os.Process
+import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
 import androidx.annotation.RequiresApi
@@ -350,6 +351,15 @@ class AndroidMediaSink(
     private val activeScreenTypes = mutableSetOf<Int>()
     private val defaultSurface = surface
     @Volatile private var screenStreamActiveChanged = onScreenStreamActiveChanged
+    /** 最近一次收到视频帧的时间 供链路看门狗判断数据流是否停止 */
+    @Volatile var lastVideoFrameAt = 0L
+        private set
+    /** 主画面首个视频参数到达时间 自动进入投屏前用它确认视频流已开始协商 */
+    @Volatile var firstVideoConfigAt = 0L
+        private set
+    /** 主画面首个视频帧到达时间 仅用于连接时间线 */
+    @Volatile var firstVideoFrameAt = 0L
+        private set
     private val surfaces = ConcurrentHashMap<Int, Surface>()
     private val videoDecoders = ConcurrentHashMap<Int, VideoDecoder>()
     private val mediaAudioTypes = mutableSetOf<AudioStreamId>()
@@ -435,6 +445,7 @@ class AndroidMediaSink(
     }
 
     override fun onVideoConfig(type: Int, codecData: ByteArray) {
+        if (type == 110 && firstVideoConfigAt == 0L) firstVideoConfigAt = SystemClock.elapsedRealtime()
         val codec = pendingVideoCodec[type] ?: VideoCodec.H264
         lastVideoConfig[type] = codec to codecData
         videoDecoder(type).configure(codec, codecData)
@@ -442,6 +453,9 @@ class AndroidMediaSink(
     }
 
     override fun onVideoFrame(type: Int, naluBytes: ByteArray) {
+        val now = SystemClock.elapsedRealtime()
+        lastVideoFrameAt = now
+        if (type == 110 && firstVideoFrameAt == 0L) firstVideoFrameAt = now
         videoDecoder(type).submit(naluBytes)
         mirrorDecoders(type).forEach { it.submit(naluBytes) }
     }

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 次要按钮获得焦点：描边换成品牌色并加粗 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#00000000" />
+    <corners android:radius="@dimen/radius_button" />
+    <stroke android:width="2dp" android:color="@color/brand" />
+</shape>
