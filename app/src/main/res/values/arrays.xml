@@ -17,9 +17,15 @@
         <item>1000 毫秒 · 更稳定</item>
     </string-array>
 
+    <string-array name="settings_video_output_values">
+        <item>自动 · SurfaceView 优先</item>
+        <item>TextureView · 兼容模式</item>
+    </string-array>
+
     <string-array name="settings_frame_rate_values">
         <item>30 帧/秒 · 减轻负载</item>
         <item>60 帧/秒</item>
+        <item>20 帧/秒 · 降低传输负载</item>
     </string-array>
 
     <string-array name="settings_audio_stream_values">

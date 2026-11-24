@@ -78,6 +78,11 @@ class SettingsActivity : Activity() {
                     R.string.settings_frame_rate_desc,
                     R.array.settings_frame_rate_values,
                 ),
+                SettingsItem.Choice(
+                    R.string.settings_video_output,
+                    R.string.settings_video_output_desc,
+                    R.array.settings_video_output_values,
+                ),
                 SettingsItem.Toggle(R.string.settings_hevc, R.string.settings_hevc_desc),
                 SettingsItem.Toggle(R.string.settings_right_hand_drive, R.string.settings_right_hand_drive_desc),
                 SettingsItem.Toggle(R.string.settings_fullscreen, R.string.settings_fullscreen_desc),
@@ -200,7 +205,9 @@ class SettingsActivity : Activity() {
                             saveChoice(item.titleResId, index)
                             row.updateValue(values[index])
                             dialog.dismiss()
-                            showReconnectHint()
+                            if (item.titleResId == R.string.settings_video_output) {
+                                Toast.makeText(this, "已保存, 重新进入投屏页后生效", Toast.LENGTH_SHORT).show()
+                            } else showReconnectHint()
                         }.setNegativeButton("取消", null).show()
                 }
             }
@@ -255,13 +262,9 @@ class SettingsActivity : Activity() {
     }
 
     private fun switchTheme() {
-        // 清掉 drawable 缓存后重建界面即可换肤, 不需要重启进程
         ThemeStore.setNight(this, !ThemeStore.isNight)
         CarPlaySessionManager.syncTheme()
-        val intent = Intent(this, HomeActivity::class.java)
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-        startActivity(intent)
-        finish()
+        recreate()
     }
 
     private fun showReconnectHint() {
@@ -306,7 +309,12 @@ class SettingsActivity : Activity() {
         R.string.settings_resolution -> if (AirPlayPersistence.loadDisplayScaleTenths(this) < 10) 2 else 0
         R.string.settings_music_buffer -> MediaAudioBuffer.presets
             .indexOf(AirPlayPersistence.loadMediaBufferMillis(this)).coerceAtLeast(0)
-        R.string.settings_frame_rate -> if (AirPlayPersistence.loadFps(this) == 60) 1 else 0
+        R.string.settings_frame_rate -> when (AirPlayPersistence.loadFps(this)) {
+            60 -> 1
+            20 -> 2
+            else -> 0
+        }
+        R.string.settings_video_output -> if (AirPlayPersistence.loadTextureViewEnabled(this)) 1 else 0
         R.string.settings_media_stream -> AirPlayPersistence.loadMediaAudioChannel(this)
         R.string.settings_nav_stream -> AirPlayPersistence.loadNavigationAudioChannel(this)
         R.string.settings_call_mode -> AirPlayPersistence.loadCallMode(this).coerceIn(0, 1)
@@ -318,7 +326,12 @@ class SettingsActivity : Activity() {
             R.string.settings_ui_scale -> AirPlayPersistence.saveUiScalePercent(this, intArrayOf(85, 100, 115)[index])
             R.string.settings_resolution -> AirPlayPersistence.saveDisplayScaleTenths(this, if (index == 2) 7 else 10)
             R.string.settings_music_buffer -> AirPlayPersistence.saveMediaBufferMillis(this, MediaAudioBuffer.presets[index])
-            R.string.settings_frame_rate -> AirPlayPersistence.saveFps(this, if (index == 1) 60 else 30)
+            R.string.settings_frame_rate -> AirPlayPersistence.saveFps(this, when (index) {
+                1 -> 60
+                2 -> 20
+                else -> 30
+            })
+            R.string.settings_video_output -> AirPlayPersistence.saveTextureViewEnabled(this, index == 1)
             R.string.settings_media_stream -> AirPlayPersistence.saveMediaAudioChannel(this, index)
             R.string.settings_nav_stream -> AirPlayPersistence.saveNavigationAudioChannel(this, index)
             R.string.settings_call_mode -> {

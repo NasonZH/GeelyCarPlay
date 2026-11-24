@@ -81,7 +81,7 @@ class CarPlayMediaEngine(
         val key = outputKey(session, stream) ?: return null
         val streamKey = StreamKey(session, type)
         Log.i(TAG, "airplay screen key connectionID=${unsignedPlistDecimal(stream["streamConnectionID"])}")
-        val screen = ScreenStream(key, session::logDebug)
+        val screen = ScreenStream(key) { session.logDebug("session=${session.diagnosticId} $it") }
         sink.setVideoDiagnosticHandler(type) {
             if (it == "first frame rendered") session.videoFrameRendered()
             // VideoStats logs its own window; forwarding it here duplicated every 5 s line.
@@ -112,7 +112,7 @@ class CarPlayMediaEngine(
                     if (streams.remove(streamKey, screen)) {
                         sink.onScreenStreamActive(type, false)
                     }
-                    session.close()
+                    session.closeWithReason("视频流结束 type=$type error=${cause?.javaClass?.simpleName ?: "无异常"}")
                 }
             },
         )
@@ -236,7 +236,7 @@ class CarPlayMediaEngine(
                                 TAG,
                                 "iAP tunnel ended reason=${cause?.message ?: "peer EOF"}",
                             )
-                            session.close()
+                            session.closeWithReason("iAP 流结束 error=${cause?.javaClass?.simpleName ?: "无异常"}")
                         }
                     },
                 )
@@ -290,7 +290,7 @@ class CarPlayMediaEngine(
         if (!attached) {
             Log.w(TAG, "iAP tunnel relay attachment was rejected after SETUP")
             pending.bridge.close()
-            session.close()
+            session.closeWithReason("iAP 隧道处理器拒绝接入")
         }
     }
 

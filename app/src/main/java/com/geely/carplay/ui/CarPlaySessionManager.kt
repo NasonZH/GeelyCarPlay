@@ -56,6 +56,8 @@ object CarPlaySessionManager {
     private var controller: CarPlayController? = null
     @Volatile private var sink: AndroidMediaSink? = null
     private var surface: Surface? = null
+    private var surfaceFailureHandler: ((String) -> Unit)? = null
+    private var surfaceFrameRendered = false
     private var linkWatchdog: ScheduledExecutorService? = null
     private var watchdogStartedAt = 0L
     @Volatile private var timingSignalMissingLogged = false
@@ -257,6 +259,15 @@ object CarPlaySessionManager {
                     navigationStreamType = AirPlayPersistence.loadNavigationStreamType(app),
                     mediaBufferMillis = AirPlayPersistence.loadMediaBufferMillis(app),
                     onAudioDiagnostic = { message -> deliver(token) { appendLog(message) } },
+                    onVideoSurfaceFrameRendered = { renderedSurface -> deliver(token) {
+                        if (surface === renderedSurface) {
+                            surfaceFrameRendered = true
+                            changed()
+                        }
+                    } },
+                    onVideoSurfaceFailure = { failedSurface, reason -> deliver(token) {
+                        if (surface === failedSurface) surfaceFailureHandler?.invoke(reason)
+                    } },
                 )
                 val listener = object : AirPlaySessionListener {
                     override fun onSessionActive(session: AirPlaySession) = deliver(token) {
@@ -360,8 +371,10 @@ object CarPlaySessionManager {
         stopLinkWatchdog()
         val previousController = controller
         val previousSink = sink
+        surface?.let { previousSink?.clearSurface(110, it) }
         controller = null
         sink = null
+        surfaceFrameRendered = false
         sessions.clear()
         isRunning = false
         isConnected = false
@@ -465,7 +478,11 @@ object CarPlaySessionManager {
         val videoSilent = sink?.lastVideoFrameAt?.takeIf { it != 0L }?.let { now - it }
         val silenceText = if (videoSilent == null) "视频静默=-" else "视频静默=${videoSilent}ms"
         val line = "链路诊断: wifi=$wifiText 接收=${kbps}kbps/${deltaPackets}包 重传=+$deltaRetrans $silenceText"
-        main.post { appendLog(line) }
+        val sessionDiagnostics = sessions.map { it.diagnosticSummary() }
+        main.post {
+            appendLog(line)
+            sessionDiagnostics.forEach { appendLog("会话诊断: $it") }
+        }
     }
 
     /** 系统 TCP 重传计数 增量持续升高说明链路在丢包重传 读不到时返回 null */
@@ -533,15 +550,11 @@ object CarPlaySessionManager {
         context.stopService(Intent(context, CarPlaySessionService::class.java))
     }
 
-    /** 主画面视频参数是否已到达 自动进入投屏前等待它 避免视频流尚未协商就进入 */
-    fun isVideoReady(): Boolean = (sink?.firstVideoConfigAt ?: 0L) != 0L
-
-    /** 记录自动进入投屏的决定 包含是否等到视频流 */
-    fun noteScreenEntry(videoReady: Boolean, waitedMillis: Long) {
+    /** 记录会话建立后立即进入投屏的决定 */
+    fun noteScreenEntry() {
         if (!isRunning) return
         screenEntryAt = SystemClock.elapsedRealtime()
-        val reason = if (videoReady) "视频流已就绪" else "等待视频流 ${waitedMillis}ms 超时"
-        appendLog("连接时间线: $reason, 进入投屏=${timelineMillis(screenEntryAt)}")
+        appendLog("连接时间线: 会话建立后立即进入投屏=${timelineMillis(screenEntryAt)}")
     }
 
     fun noteScreenCreated() {
@@ -563,14 +576,35 @@ object CarPlaySessionManager {
         appendLog(timelineSummary())
     }
 
-    fun attachSurface(value: Surface) {
+    fun noteSurfaceViewFrameSubmitted() {
+        if (!isRunning || screenEntryAt == 0L) return
+        appendLog("连接时间线: SurfaceView 首帧已提交 实际呈现时间未测量")
+        appendLog(timelineSummary())
+    }
+
+    fun hasSurfaceFrameRendered(): Boolean = surfaceFrameRendered
+
+    fun noteVideoOutput(message: String) {
+        appendLog("视频显示: $message")
+    }
+
+    fun attachSurface(value: Surface, onFailure: (String) -> Unit) {
+        surfaceFrameRendered = false
+        surfaceFailureHandler = onFailure
         surface = value
         sink?.setSurface(110, value)
+        appendLog("Surface 诊断: 挂载 valid=${value.isValid} sessions=${sessions.map { it.diagnosticId }}")
     }
 
     fun detachSurface(value: Surface) {
         sink?.clearSurface(110, value)
-        if (surface === value) surface = null
+        val current = surface === value
+        if (current) {
+            surface = null
+            surfaceFailureHandler = null
+            surfaceFrameRendered = false
+        }
+        appendLog("Surface 诊断: 分离 current=$current valid=${value.isValid} sessions=${sessions.map { it.diagnosticId }}")
         controller?.sendTouch(emptyList())
     }
 

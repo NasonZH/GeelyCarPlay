@@ -58,29 +58,50 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
             socket = accepted
             run(accepted)
         } catch (error: Exception) {
-            if (!closed.get()) listener.onClosed(error)
+            if (!closed.get()) {
+                runCatching { onDiagnostic("视频接入退出: error=${error.javaClass.simpleName}") }
+                listener.onClosed(error)
+            }
         }
     }
 
     private fun run(sock: Socket) {
         var failure: Throwable? = null
+        var exitReason = "读取循环结束"
+        var stage = "获取输入流"
         val stats = StreamReceiveStats("video", onDiagnostic)
         try {
             val input = sock.getInputStream()
             while (!closed.get()) {
                 stats.reading()
-                val header = readFully(input, HEADER_LEN) ?: break
+                stage = "读取头部"
+                val header = readFully(input, HEADER_LEN)
+                if (header == null) {
+                    exitReason = "头部 EOF"
+                    break
+                }
                 val bodySize = readU32Le(header, 0)
-                if (bodySize > MAX_BODY) break
-                val body = readFully(input, bodySize) ?: break
+                if (bodySize > MAX_BODY) {
+                    exitReason = "负载长度超限 length=$bodySize"
+                    break
+                }
+                stage = "读取负载"
+                val body = readFully(input, bodySize)
+                if (body == null) {
+                    exitReason = "负载读取结束 length=$bodySize"
+                    break
+                }
                 stats.received(HEADER_LEN + bodySize)
+                stage = "处理消息"
                 onMessage(header, body)
                 stats.processed()
             }
         } catch (error: Exception) {
             failure = error
+            exitReason = "异常 error=${error.javaClass.simpleName}"
         } finally {
             stats.flush(ended = true)
+            runCatching { onDiagnostic("视频读取退出: 原因=$exitReason stage=$stage localClosed=${closed.get()}") }
             if (socket === sock) socket = null
             safeClose(sock)
             if (!closed.get()) listener.onClosed(failure)

@@ -19,6 +19,7 @@ import java.util.Locale
 class HomeActivity : Activity() {
 
     private var sessionConnected = false
+    private var appliedNightTheme = false
 
     private val connectionObserver: () -> Unit = {
         renderConnectionState()
@@ -39,6 +40,7 @@ class HomeActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         ThemeStore.load(this)
+        appliedNightTheme = ThemeStore.isNight
         super.onCreate(savedInstanceState)
         if (intent.action == ACTION_EXIT) {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
@@ -76,6 +78,10 @@ class HomeActivity : Activity() {
     override fun onResume() {
         super.onResume()
         if (intent.action == ACTION_EXIT) return
+        if (appliedNightTheme != ThemeStore.isNight) {
+            recreate()
+            return
+        }
         showClock()
         sessionConnected = CarPlaySessionManager.isConnected
         refreshDeviceState()

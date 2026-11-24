@@ -2,6 +2,7 @@ package com.shilapi.xcertplay.media
 
 import android.view.Surface
 import com.shilapi.xcertplay.airplay.VideoCodec
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
@@ -9,6 +10,7 @@ internal sealed interface VideoJob {
     data class Config(val codec: VideoCodec, val codecData: ByteArray) : VideoJob
     data class Frame(val nalus: ByteArray, val receivedNs: Long = System.nanoTime()) : VideoJob
     data class SurfaceChanged(val surface: Surface?) : VideoJob
+    data class DetachSurface(val surface: Surface, val completed: CountDownLatch) : VideoJob
     data object Resync : VideoJob
 }
 
@@ -52,6 +54,10 @@ internal class VideoDecodeQueue(
                 else -> Unit
             }
         }
+    }
+
+    fun completeSurfaceDetaches() {
+        jobs.filterIsInstance<VideoJob.DetachSurface>().forEach { it.completed.countDown() }
     }
 
     fun poll(timeoutMillis: Long): VideoJob? = jobs.poll(timeoutMillis, TimeUnit.MILLISECONDS)

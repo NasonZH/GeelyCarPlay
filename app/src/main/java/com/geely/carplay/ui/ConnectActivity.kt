@@ -4,9 +4,6 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.os.SystemClock
 import android.view.View
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -37,37 +34,16 @@ class ConnectActivity : Activity() {
     private var stepIndex = STEP_CHOOSE
     private var connected = false
     private var autoEntered = false
-    private var screenEntered = false
-    private val mainHandler = Handler(Looper.getMainLooper())
-    private var videoWaitStartedAt = 0L
-    private var videoWaitDeadline = 0L
     private var phoneLookupGeneration = 0
     private var hotspotLookupGeneration = 0
     private var hotspotReadFailure: CarHotspotFailure? = null
     private val stepHolders = mutableListOf<StepHolder>()
-    private val awaitVideoRunnable = object : Runnable {
-        override fun run() {
-            if (isFinishing || isDestroyed || screenEntered) return
-            if (!CarPlaySessionManager.isConnected || CarPlaySessionManager.isExiting) return
-            if (CarPlaySessionManager.isVideoReady()) {
-                enterCarPlay(videoReady = true)
-                return
-            }
-            if (SystemClock.elapsedRealtime() >= videoWaitDeadline) {
-                enterCarPlay(videoReady = false)
-                return
-            }
-            mainHandler.postDelayed(this, VIDEO_READY_POLL_MILLIS)
-        }
-    }
     private val connectionObserver: () -> Unit = {
         val wasConnected = connected
         connected = CarPlaySessionManager.isConnected
         if (CarPlaySessionManager.isRunning || connected) stepIndex = STEP_LINK
         if (!connected) {
             autoEntered = false
-            screenEntered = false
-            mainHandler.removeCallbacks(awaitVideoRunnable)
         }
         if (connected && !wasConnected) autoEnterCarPlay()
         render()
@@ -99,7 +75,6 @@ class ConnectActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        if (autoEntered && !screenEntered && CarPlaySessionManager.isConnected) beginVideoWait()
         CarPlaySessionManager.observe(connectionObserver)
         if (stepIndex == STEP_PHONE) buildIphoneList()
         if (stepIndex == STEP_HOTSPOT) refreshHotspot()
@@ -108,7 +83,6 @@ class ConnectActivity : Activity() {
     override fun onPause() {
         phoneLookupGeneration++
         hotspotLookupGeneration++
-        mainHandler.removeCallbacks(awaitVideoRunnable)
         CarPlaySessionManager.removeObserver(connectionObserver)
         super.onPause()
     }
@@ -501,35 +475,12 @@ class ConnectActivity : Activity() {
         }
     }
 
-    /** 连接成功自动进入投屏画面 同一页面每次连接只自动进入一次 */
+    /** 会话建立后立即进入投屏 同一页面每次连接只自动进入一次 */
     private fun autoEnterCarPlay() {
-        if (autoEntered || CarPlaySessionManager.isExiting) return
-        autoEntered = true
-        beginVideoWait()
-    }
-
-    /**
-     * 等待主画面视频参数到达再进入 避免视频流还没协商就创建投屏页
-     * 超时后仍然进入 防止音频或其他异常场景卡在连接页
-     */
-    private fun beginVideoWait() {
-        mainHandler.removeCallbacks(awaitVideoRunnable)
-        videoWaitStartedAt = SystemClock.elapsedRealtime()
-        videoWaitDeadline = videoWaitStartedAt + VIDEO_READY_TIMEOUT_MILLIS
-        if (CarPlaySessionManager.isVideoReady()) {
-            enterCarPlay(videoReady = true)
-            return
-        }
-        mainHandler.postDelayed(awaitVideoRunnable, VIDEO_READY_POLL_MILLIS)
-    }
-
-    private fun enterCarPlay(videoReady: Boolean) {
-        if (screenEntered || isFinishing || isDestroyed) return
+        if (autoEntered || isFinishing || isDestroyed) return
         if (!CarPlaySessionManager.isConnected || CarPlaySessionManager.isExiting) return
-        screenEntered = true
-        mainHandler.removeCallbacks(awaitVideoRunnable)
-        val waitedMillis = SystemClock.elapsedRealtime() - videoWaitStartedAt
-        CarPlaySessionManager.noteScreenEntry(videoReady, waitedMillis)
+        autoEntered = true
+        CarPlaySessionManager.noteScreenEntry()
         startCarPlay()
     }
 
@@ -598,10 +549,6 @@ class ConnectActivity : Activity() {
         private const val MODE_WIRELESS = "wireless"
         private const val MODE_USB = "usb"
         private const val VPN_REQUEST = 101
-
-        /** 自动进入投屏前等待视频参数的最长时间 */
-        private const val VIDEO_READY_TIMEOUT_MILLIS = 3_000L
-        private const val VIDEO_READY_POLL_MILLIS = 100L
 
         private const val STEP_CHOOSE = 0
         private const val STEP_HOTSPOT = 1

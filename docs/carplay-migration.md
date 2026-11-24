@@ -33,11 +33,11 @@ AirPlayInfoPlist与主来源一致，没有精简格式、telephony、speechReco
 | 入口 | 当前实现 |
 | --- | --- |
 | CarPlaySessionManager / Service | 真实会话、代次取消、异步清理、前台通知、退出保护；链路看门狗用时间同步回包与视频帧双信号，双静默5秒判定断开；记录连接时间线，无线连接每5秒输出链路诊断，连接后自动暂停续播 |
-| ConnectActivity / HotspotSettings | 已配对蓝牙列表、热点配置回退、VPN授权、连接中取消；没有热点在线筛选；iPhone列表跟随蓝牙通道来源并优先在线设备，快速连接进入后自动开始；等主画面视频参数最多3秒再进入投屏 |
-| CarPlayActivity | TextureView、触摸、等比显示，当前页面首帧前保留提示；确认连接成功后再断开才回首页，连接失败停留本页；首帧渲染回调转发到界面并记录时间线 |
+| ConnectActivity / HotspotSettings | 已配对蓝牙列表、热点配置回退、VPN授权、连接中取消；没有热点在线筛选；iPhone列表跟随蓝牙通道来源并优先在线设备，快速连接进入后自动开始；会话建立后立即进入投屏，不等待视频参数或稳定收帧 |
+| CarPlayActivity | SurfaceView 优先、明确输出初始化错误时回退 TextureView，保留手动兼容选项；触摸、等比显示，当前页面首帧前保留提示；确认连接成功后再断开才回首页，连接失败停留本页；首帧渲染回调转发到界面并记录时间线 |
 | HomeActivity | 自动连接、断开、退出确认，清空旧任务栈后从新根页面结束进程；连接手机与快速连接并排，快速连接复查在线设备，连接前检查热点与蓝牙；会话在线时显示当前连接 |
 | SplashActivity / StartupConnections | 启动页只做初始化；不再自动开启热点或蓝牙，缺失时由首页连接前检查提示 |
-| AirPlayPersistence | 资源引用改到app；H52音频默认开启，但实际依赖OEM能力检测；音乐缓冲默认500毫秒 |
+| AirPlayPersistence | 资源引用改到app；H52音频默认开启，但实际依赖OEM能力检测；音乐缓冲默认500毫秒；帧率提供30/60/20fps，视频显示方式持久化 |
 | DiPlayBootstrap / DiPlayPreferences | 本地认证、中文提示、上次选择记录和成功连接历史；快速连接按历史找在线设备 |
 | DiPlayBluetooth | API23以下尝试adapter地址，其他用安全设置/标识回退；无线控制器另有本地蓝牙地址解析 |
 | 麦克风声明 | 已恢复按RECORD_AUDIO权限判断，同时传入能力声明和引擎；此前误用默认false的设置导致与来源不同 |
@@ -72,3 +72,5 @@ app/src/main/assets/offline-mfi/certificate.p7b
 ## 许可
 
 保留根LICENSE、各文件标记、shared/LIBOPUS_NOTICE.md、shared/BYD_HUD_ICONS_NOTICE.md和vendor/jmdns声明。保留Concentus等组件现有许可，不能将全部继承代码擅自替换成统一许可。
+
+主题切换只重建设置页，首页恢复前台时按需重建，不再清空任务栈；保留向 iPhone 同步昼夜模式。会话关闭来源、视频退出阶段、Surface 挂载与时间同步累计诊断详见排障手册。

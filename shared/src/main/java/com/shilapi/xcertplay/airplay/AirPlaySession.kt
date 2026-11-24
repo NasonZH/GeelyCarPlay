@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay.airplay
 
+import android.os.SystemClock
 import android.util.Log
 import com.shilapi.xcertplay.mfi.MfiAuthenticator
 import com.shilapi.xcertplay.transport.BlockingDuplexByteStream
@@ -15,6 +16,7 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 data class AirPlayDeviceInfo(
     val name: String,
@@ -78,6 +80,12 @@ class AirPlaySession(
         private set
     private var clusterStreamSetups = 0
 
+    val diagnosticId = nextDiagnosticId.incrementAndGet()
+    private val createdAt = SystemClock.elapsedRealtime()
+    private val touchSent = AtomicLong()
+    private val touchFailed = AtomicLong()
+    private val touchWithContactsSent = AtomicLong()
+    private val lastTouchSentAt = AtomicLong()
     private val closed = AtomicBoolean(false)
     private val notified = AtomicBoolean(false)
     private var eventServer: ServerSocket? = null
@@ -116,16 +124,35 @@ class AirPlaySession(
 
     internal fun logTrace(message: String) = trace { message }
 
+    /** 仅累计本会话的数据 不复用全局触摸延迟探针 */
+    fun diagnosticSummary(): String {
+        val now = SystemClock.elapsedRealtime()
+        val lastTouchAt = lastTouchSentAt.get()
+        val touchAge = if (lastTouchAt == 0L) -1L else now - lastTouchAt
+        return "session=$diagnosticId ageMs=${now - createdAt} touchSent=${touchSent.get()} " +
+            "touchFailed=${touchFailed.get()} touchWithContacts=${touchWithContactsSent.get()} " +
+            "lastTouchAgoMs=$touchAge ${ntp.diagnosticSummary()}"
+    }
+
     fun start() {
+        debugLog("会话诊断: 创建 ${diagnosticSummary()}")
         Thread(::runControl, "airplay-control").apply {
             isDaemon = true
             start()
         }
     }
 
-    override fun close() {
+    override fun close() = closeWithReason("外部关闭")
+
+    internal fun closeWithReason(reason: String) {
         if (!closed.compareAndSet(false, true)) return
         safeClose(socket)
+        runCatching {
+            val caller = Throwable().stackTrace.take(5).joinToString(" <- ") {
+                "${it.className.substringAfterLast('.')}.${it.methodName}:${it.lineNumber}"
+            }
+            debugLog("会话关闭诊断: 原因=$reason caller=$caller ${diagnosticSummary()}")
+        }
         try {
             media.onSessionClosed(this)
         } catch (error: Exception) {
@@ -189,7 +216,7 @@ class AirPlaySession(
             true
         } catch (error: Exception) {
             Log.w(TAG, "airplay event command failed type=${command["type"]}", error)
-            close()
+            closeWithReason("event 命令发送失败 type=${command["type"]} error=${error.javaClass.simpleName}")
             false
         }
     }
@@ -202,6 +229,13 @@ class AirPlaySession(
         val sendStartNs = System.nanoTime()
         val sent = sendHidReport(AirPlayHid.TOUCH_HID_UID, report)
         if (sent) com.shilapi.xcertplay.media.TouchLatencyProbe.onTouchSent(sendStartNs, System.nanoTime() - sendStartNs)
+        if (sent) {
+            touchSent.incrementAndGet()
+            if (contacts.isNotEmpty()) touchWithContactsSent.incrementAndGet()
+            lastTouchSentAt.set(SystemClock.elapsedRealtime())
+        } else {
+            touchFailed.incrementAndGet()
+        }
         if (sent && firstTouchSendLogged.compareAndSet(false, true)) {
             val first = scaled.firstOrNull()
             Log.i(
@@ -374,7 +408,7 @@ class AirPlaySession(
             if (!closed.get()) Log.e(TAG, "airplay $closeReason", error)
         } finally {
             debugLog("airplay control closing reason=$closeReason activeStreams=$activeStreams")
-            close()
+            closeWithReason("控制通道退出: $closeReason")
         }
     }
 
@@ -668,7 +702,7 @@ class AirPlaySession(
             if (shared == null) {
                 Log.e(TAG, "airplay event rejected: pair-verify shared secret unavailable")
                 safeClose(socket)
-                close()
+                closeWithReason("event 缺少配对密钥")
                 return
             }
             val writeKey = AirPlayCrypto.hkdfSha512(
@@ -691,12 +725,13 @@ class AirPlaySession(
         } catch (error: Exception) {
             if (!closed.get()) {
                 Log.e(TAG, "airplay event accept failed", error)
-                close()
+                closeWithReason("event 接入失败 error=${error.javaClass.simpleName}")
             }
         }
     }
 
     private fun runEventRead(socket: Socket) {
+        var exitReason = "读取循环结束"
         try {
             val input = BufferedInputStream(socket.getInputStream())
             val output = BufferedOutputStream(socket.getOutputStream())
@@ -705,13 +740,21 @@ class AirPlaySession(
             val buffer = ByteArray(READ_CHUNK_BYTES)
             while (!closed.get()) {
                 val count = input.read(buffer)
-                if (count < 0) break
-                val cipher = eventCipher ?: break
+                if (count < 0) {
+                    exitReason = "对端 EOF"
+                    break
+                }
+                val cipher = eventCipher
+                if (cipher == null) {
+                    exitReason = "event 加密状态已清空"
+                    break
+                }
                 encrypted += buffer.copyOf(count)
                 val decrypted = try {
                     cipher.decrypt(encrypted)
                 } catch (error: Exception) {
                     Log.e(TAG, "airplay event decrypt failed encrypted=${encrypted.size}", error)
+                    exitReason = "解密失败 error=${error.javaClass.simpleName}"
                     break
                 }
                 encrypted = decrypted.rest
@@ -736,13 +779,15 @@ class AirPlaySession(
                 }
             }
         } catch (error: Exception) {
+            exitReason = "读写异常 error=${error.javaClass.simpleName}"
             if (!closed.get()) Log.e(TAG, "airplay event read failed", error)
         } finally {
+            debugLog("event 退出诊断: session=$diagnosticId 原因=$exitReason sessionClosed=${closed.get()}")
             debugLog("airplay event connection closed")
             if (eventSocket === socket) eventSocket = null
             eventCipher = null
             safeClose(socket)
-            if (!closed.get()) close()
+            if (!closed.get()) closeWithReason("event 读取退出: $exitReason")
         }
     }
 
@@ -753,6 +798,7 @@ class AirPlaySession(
     }
 
     private companion object {
+        val nextDiagnosticId = AtomicLong()
         const val TAG = "xcertplay-usb"
         const val PLIST_CONTENT_TYPE = "application/x-apple-binary-plist"
         const val PAIRING_CONTENT_TYPE = "application/pairing+tlv8"

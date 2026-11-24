@@ -59,6 +59,7 @@ object AirPlayPersistence {
     private const val KEY_MODEL = "model"
     private const val KEY_OEM_LABEL = "oem_label"
     private const val KEY_FPS = "display_fps"
+    private const val KEY_TEXTURE_VIEW = "video_texture_view"
     private const val KEY_MEDIA_BUFFER_MS = "media_buffer_ms"
     private const val KEY_CLUSTER_MAP = "cluster_map_enabled"
     private const val KEY_CENTER_MAP_OVERLAY = "center_map_overlay"
@@ -487,6 +488,14 @@ object AirPlayPersistence {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString(KEY_OEM_LABEL, oemLabel)
             .apply()
+    }
+
+    fun loadTextureViewEnabled(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_TEXTURE_VIEW, false)
+
+    fun saveTextureViewEnabled(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean(KEY_TEXTURE_VIEW, enabled).apply()
     }
 
     fun loadFps(context: Context): Int = AirPlayDisplaySettings.sanitizeFps(

@@ -30,6 +30,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /** MediaCodec buffer accessors moved from array to indexed methods in API 21. */
@@ -337,6 +338,8 @@ class AndroidMediaSink(
     private val onAudioDiagnostic: (String) -> Unit = {},
     /** True while any music ("media") audio stream is running; called from media threads. */
     private val onMediaAudioChanged: (Boolean) -> Unit = {},
+    private val onVideoSurfaceFailure: (Surface, String) -> Unit = { _, _ -> },
+    private val onVideoSurfaceFrameRendered: (Surface) -> Unit = {},
 ) : MediaSink {
     private val appContext = context?.applicationContext
     private val audioManager = appContext?.systemService(AudioManager::class.java, "audio")
@@ -360,6 +363,7 @@ class AndroidMediaSink(
     /** 主画面首个视频帧到达时间 仅用于连接时间线 */
     @Volatile var firstVideoFrameAt = 0L
         private set
+    private val videoSurfaceLock = Any()
     private val surfaces = ConcurrentHashMap<Int, Surface>()
     private val videoDecoders = ConcurrentHashMap<Int, VideoDecoder>()
     private val mediaAudioTypes = mutableSetOf<AudioStreamId>()
@@ -401,12 +405,17 @@ class AndroidMediaSink(
     }
 
     fun setSurface(type: Int, surface: Surface) {
-        surfaces[type] = surface
-        videoDecoders[type]?.setSurface(surface)
+        synchronized(videoSurfaceLock) {
+            surfaces[type] = surface
+            videoDecoders[type]?.setSurface(surface)
+        }
     }
 
     fun clearSurface(type: Int, surface: Surface) {
-        if (surfaces.remove(type, surface)) videoDecoders[type]?.setSurface(null)
+        val decoder = synchronized(videoSurfaceLock) {
+            if (surfaces.remove(type, surface)) videoDecoders[type] else null
+        }
+        decoder?.detachSurfaceAndWait(surface)
     }
 
     /**
@@ -464,7 +473,9 @@ class AndroidMediaSink(
         if (!active) {
             videoRecoveryHandlers.remove(type)
             videoDiagnosticHandlers.remove(type)
-            videoDecoders.remove(type)?.close()
+            val decoder = videoDecoders[type]
+            decoder?.closeAndWait()
+            if (decoder != null) videoDecoders.remove(type, decoder)
             synchronized(mirrorLock) {
                 mirrorDecoders.keys.filter { it.first == type }.forEach { mirrorDecoders.remove(it)?.close() }
             }
@@ -654,8 +665,9 @@ class AndroidMediaSink(
         }
     }
 
-    private fun videoDecoder(type: Int): VideoDecoder =
+    private fun videoDecoder(type: Int): VideoDecoder = synchronized(videoSurfaceLock) {
         videoDecoders.getOrPutCompat(type) { newVideoDecoder(type, surfaces[type] ?: defaultSurface) }
+    }
 
     private fun newVideoDecoder(type: Int, surface: Surface?, statsLabel: String? = null) = VideoDecoder(
         type,
@@ -665,6 +677,12 @@ class AndroidMediaSink(
         preferSoftwareHevcDecoder,
         requestKeyFrame = { requestVideoRecovery(type) },
         report = { videoDiagnosticHandlers[type]?.invoke(it) },
+        frameRendered = { renderedSurface ->
+            if (type == 110 && statsLabel == null) onVideoSurfaceFrameRendered(renderedSurface)
+        },
+        surfaceFailure = { failedSurface, reason ->
+            if (type == 110 && statsLabel == null) onVideoSurfaceFailure(failedSurface, reason)
+        },
         statsLabel = statsLabel,
     )
 
@@ -699,9 +717,13 @@ private class VideoDecoder(
     private val preferSoftwareHevcDecoder: Boolean,
     private val requestKeyFrame: () -> Unit,
     private val report: (String) -> Unit,
+    private val surfaceFailure: (Surface, String) -> Unit,
+    private val frameRendered: (Surface) -> Unit,
     statsLabel: String? = null,
 ) : Closeable {
     private val queue = VideoDecodeQueue()
+    private val lifecycleLock = Any()
+    private val stopped = CountDownLatch(1)
     @Volatile private var running = true
     @Volatile private var decoder: MediaCodec? = null
     private var outputSurface: Surface? = surface
@@ -728,6 +750,36 @@ private class VideoDecoder(
         queue.offer(VideoJob.SurfaceChanged(surface))
     }
 
+    fun detachSurfaceAndWait(surface: Surface) {
+        val completed = CountDownLatch(1)
+        val signal = synchronized(lifecycleLock) {
+            if (!running) stopped else {
+                queue.discardFrames()
+                queue.offer(VideoJob.DetachSurface(surface, completed))
+                completed
+            }
+        }
+        awaitCompletion(signal)
+    }
+
+    fun closeAndWait() {
+        close()
+        awaitCompletion(stopped)
+    }
+
+    private fun awaitCompletion(signal: CountDownLatch) {
+        var interrupted = false
+        while (true) {
+            try {
+                signal.await()
+                break
+            } catch (_: InterruptedException) {
+                interrupted = true
+            }
+        }
+        if (interrupted) Thread.currentThread().interrupt()
+    }
+
     override fun close() {
         running = false
         thread.interrupt()
@@ -747,6 +799,13 @@ private class VideoDecoder(
                             } else feed(job.nalus)
                         }
                         is VideoJob.SurfaceChanged -> changeSurface(job.surface)
+                        is VideoJob.DetachSurface -> {
+                            try {
+                                if (outputSurface === job.surface) changeSurface(null)
+                            } finally {
+                                job.completed.countDown()
+                            }
+                        }
                         is VideoJob.Resync -> recover("video queue overflow")
                         null -> Unit
                     }
@@ -764,7 +823,15 @@ private class VideoDecoder(
         } catch (_: InterruptedException) {
             // Worker shut down.
         } finally {
-            releaseDecoder()
+            try {
+                releaseDecoder()
+            } finally {
+                synchronized(lifecycleLock) {
+                    running = false
+                    queue.completeSurfaceDetaches()
+                    stopped.countDown()
+                }
+            }
         }
     }
 
@@ -813,6 +880,7 @@ private class VideoDecoder(
         }
         if (next == null) {
             report("decoder configuration failed mime=$mime size=${width}x$height")
+            surfaceFailure(surface, "解码器无法配置当前视频输出 mime=$mime size=${width}x$height")
         }
         decoder = next
         renderedFrameLogged = false
@@ -988,6 +1056,7 @@ private class VideoDecoder(
                     if (render && !renderedFrameLogged) {
                         renderedFrameLogged = true
                         report("first frame rendered")
+                        outputSurface?.let(frameRendered)
                         Log.i(TAG, "video decoder rendered first frame bytes=${info.size}")
                     }
                     if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) return

@@ -8,6 +8,7 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 /**
  * CarPlay timing-port clock sync.
  *
@@ -17,6 +18,16 @@ import java.util.concurrent.atomic.AtomicBoolean
  * the phone's media-clock domain, which /feedback reports.
  */
 class NtpClock : Closeable {
+    private val requestsSent = AtomicLong()
+    private val requestSendErrors = AtomicLong()
+    private val peerPacketsReceived = AtomicLong()
+    private val requestsReceived = AtomicLong()
+    private val responsesSent = AtomicLong()
+    private val responsesReceived = AtomicLong()
+    private val responsesMatched = AtomicLong()
+    private val responsesAccepted = AtomicLong()
+    private val receiveErrors = AtomicLong()
+    private val clockUpdates = AtomicLong()
     private val running = AtomicBoolean(false)
     private val socketLock = Any()
     private val clockLock = Any()
@@ -37,6 +48,13 @@ class NtpClock : Closeable {
     /** 最近一次收到 iPhone 时间同步包的时间 无线断开检测用它代替蓝牙状态 */
     @Volatile var lastPeerPacketAt = 0L
         private set
+
+    internal fun diagnosticSummary(): String =
+        "ntpTx=${requestsSent.get()} ntpRequestSendErrors=${requestSendErrors.get()} " +
+            "ntpPeerRx=${peerPacketsReceived.get()} ntpRequestsRx=${requestsReceived.get()} " +
+            "ntpResponsesTx=${responsesSent.get()} ntpResponsesRx=${responsesReceived.get()} " +
+            "ntpMatched=${responsesMatched.get()} ntpAccepted=${responsesAccepted.get()} " +
+            "ntpReceiveErrors=${receiveErrors.get()} ntpClockUpdates=${clockUpdates.get()}"
 
     fun listen(): Int {
         check(!running.getAndSet(true)) { "NtpClock is already running" }
@@ -77,6 +95,7 @@ class NtpClock : Closeable {
             } catch (_: InterruptedException) {
                 return
             } catch (_: Exception) {
+                requestSendErrors.incrementAndGet()
                 try {
                     Thread.sleep(REQUEST_INTERVAL_MS)
                 } catch (_: InterruptedException) {
@@ -95,7 +114,9 @@ class NtpClock : Closeable {
         val t1 = syncedNtp()
         synchronized(clockLock) { pendingT1 = t1 }
         ntpBytes(t1).copyInto(packet, NTP_TRANSMIT_OFFSET)
-        currentSocket()?.send(DatagramPacket(packet, packet.size, destination))
+        val sock = currentSocket()
+        sock?.send(DatagramPacket(packet, packet.size, destination))
+        if (sock != null) requestsSent.incrementAndGet()
     }
 
     private fun runReceiver() {
@@ -106,12 +127,18 @@ class NtpClock : Closeable {
             try {
                 sock.receive(packet)
             } catch (_: Exception) {
-                if (running.get()) continue else return
+                if (running.get()) {
+                    receiveErrors.incrementAndGet()
+                    continue
+                } else return
             }
             val message = packet.data.copyOf(packet.length)
             val address = packet.address
             if (message.size >= NTP_PACKET_BYTES && address != null) {
-                if (peer?.address == address) lastPeerPacketAt = SystemClock.elapsedRealtime()
+                if (peer?.address == address) {
+                    peerPacketsReceived.incrementAndGet()
+                    lastPeerPacketAt = SystemClock.elapsedRealtime()
+                }
                 handleMessage(message, InetSocketAddress(address, packet.port))
             }
         }
@@ -119,8 +146,14 @@ class NtpClock : Closeable {
 
     private fun handleMessage(message: ByteArray, source: InetSocketAddress) {
         when (message[1].toInt() and 0xff) {
-            PT_REQUEST -> respondToRequest(message, source)
-            PT_RESPONSE -> handleResponse(message)
+            PT_REQUEST -> {
+                requestsReceived.incrementAndGet()
+                respondToRequest(message, source)
+            }
+            PT_RESPONSE -> {
+                responsesReceived.incrementAndGet()
+                handleResponse(message)
+            }
         }
     }
 
@@ -132,7 +165,9 @@ class NtpClock : Closeable {
         request.copyInto(response, NTP_ORIGINATE_OFFSET, NTP_TRANSMIT_OFFSET, NTP_PACKET_BYTES)
         ntpBytes(syncedNtp()).copyInto(response, NTP_RECEIVE_OFFSET)
         ntpBytes(syncedNtp()).copyInto(response, NTP_TRANSMIT_OFFSET)
-        currentSocket()?.send(DatagramPacket(response, response.size, source))
+        val sock = currentSocket()
+        sock?.send(DatagramPacket(response, response.size, source))
+        if (sock != null) responsesSent.incrementAndGet()
     }
 
     private fun handleResponse(response: ByteArray) {
@@ -145,11 +180,13 @@ class NtpClock : Closeable {
             val pending = pendingT1
             if (pending == null || pending != t1) return
             pendingT1 = null
+            responsesMatched.incrementAndGet()
         }
 
         val offset = t2.subtract(t1).add(t3.subtract(t4)).toDouble() * 0.5 / TWO32_DOUBLE
         val rtt = t4.subtract(t1).subtract(t3.subtract(t2)).toDouble() / TWO32_DOUBLE
         if (rtt < 0.0) return
+        responsesAccepted.incrementAndGet()
 
         if (rtt < pickRtt) {
             pickRtt = rtt
@@ -174,6 +211,7 @@ class NtpClock : Closeable {
         val stepping = !synced || Math.abs(offsetSec) > STEP_THRESHOLD_SEC
         val applied = if (stepping) offsetSec else offsetSec * SLEW_GAIN
         clockOffsetNs += Math.round(applied * 1e9)
+        clockUpdates.incrementAndGet()
         if (stepping) {
             delays.fill(Double.POSITIVE_INFINITY)
             delayIndex = 0
