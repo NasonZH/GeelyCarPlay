@@ -13,6 +13,7 @@ import android.widget.Toast
 import com.geely.carplay.ui.widget.IconView
 import android.app.AlertDialog
 import android.bluetooth.BluetoothClass
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.net.VpnService
 import android.provider.Settings
@@ -134,8 +135,9 @@ class ConnectActivity : Activity() {
                         .map {
                             PairedPhone(
                                 address = it.address,
-                                name = it.name ?: getString(R.string.connect_phone_unnamed),
-                                isPhone = it.bluetoothClass?.majorDeviceClass == BluetoothClass.Device.Major.PHONE,
+                                name = phoneDisplayName(it),
+                                isPhone = it.bluetoothClass?.majorDeviceClass == BluetoothClass.Device.Major.PHONE ||
+                                    it.name?.contains(IPHONE_NAME, ignoreCase = true) == true,
                                 isOnline = connectedAddresses.any { address ->
                                     address.equals(it.address, ignoreCase = true)
                                 } || (sessionConnected &&
@@ -153,6 +155,16 @@ class ConnectActivity : Activity() {
                 )
             }
         }, "carplay-phone-list").start()
+    }
+
+    private fun phoneDisplayName(device: BluetoothDevice): String {
+        // 旧版 Android 的别名接口未公开 读取失败时保留原名称
+        val alias = runCatching {
+            BluetoothDevice::class.java.getMethod("getAlias").invoke(device) as? String
+        }.getOrNull()
+        return alias?.takeIf { it.isNotBlank() }
+            ?: device.name
+            ?: getString(R.string.connect_phone_unnamed)
     }
 
     /**

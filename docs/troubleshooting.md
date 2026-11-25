@@ -87,6 +87,14 @@ su -c 'cp /data/local/tmp/hostapd.orig /system/bin/hostapd && chmod 755 /system/
 
 注意：profile 绑定只在后台线程执行，主线程调用时跳过；厂商 ANW 查询仅在厂商蓝牙模式开启时执行；不再使用“厂商模式默认在线”的旧判断。
 
+## 选择设备时名称与系统蓝牙列表不同（2026-11-25 调整）
+
+MI 6 系统蓝牙列表显示“周二哥”，应用设备列表及系统蓝牙快照中的原始名称是一串随机字符。系统显示名称与原始名称不同，不属于中文字体或字符编码转换问题。
+
+系统蓝牙设备列表优先反射读取 `BluetoothDevice.getAlias()`；别名为空、空白或读取失败时回退到原始 `name`，原始名称为 null 时沿用未命名提示。用户选择设备时沿用已有保存流程，将显示名称保存供首页使用。吉利原厂 ANW 名称读取、设备地址及连接流程不变。
+
+应用及别名回退场景的测试源码编译成功，未执行测试；本任务新增测试文件已按提交规则移除。APK 已构建并推送至 MI 6 的 `/sdcard/Download/Geely-CarPlay.apk`，本地与手机文件 SHA-256 一致。当前改动待用户手动安装并确认“周二哥”正常显示。
+
 ## 蓝牙快速失败
 
 历史IOException为`read failed, socket might closed or timeout, read ret: -1`，同步系统日志出现`sec_id:0 is zero or BTM_SetSecurityLevel failed, remote_scn:1`。发生在本机RFCOMM建立，尚未到认证，不是证书失败证据。用户重启蓝牙/设备后进入下一阶段；当时未加入盲目重试或不安全通道回退。复发需读取同时间段系统蓝牙日志。
