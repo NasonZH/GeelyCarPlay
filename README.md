@@ -62,7 +62,7 @@ applicationId 为 `com.carplay`，Kotlin 包名与 namespace 仍为 `com.geely.c
 ./gradlew :app:assembleDebug --offline --console=plain
 ```
 
-APK：`app/build/outputs/apk/debug/geely-carplay-v<版本>.apk`（当前 v1.0.1）。仓库**不包含** Apple MFi 认证资产，构建前需自备 `app/src/main/assets/offline-mfi/identity.pk8` 与 `certificate.p7b`；缺少时仍可编译，但本地 MFi 认证不可用。GitHub Releases 提供预构建安装包。
+APK：`app/build/outputs/apk/debug/CarPlay-v<版本>.apk`（当前 v1.0.1）。仓库**不包含** Apple MFi 认证资产，构建前需自备 `app/src/main/assets/offline-mfi/identity.pk8` 与 `certificate.p7b`；缺少时仍可编译，但本地 MFi 认证不可用。GitHub Releases 提供预构建安装包。
 
 ## 使用指南
 

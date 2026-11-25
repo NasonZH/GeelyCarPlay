@@ -47,7 +47,7 @@ dependencies {
 androidComponents {
     onVariants { variant ->
         variant.outputs.forEach { output ->
-            output.outputFileName.set("geely-carplay-v$appVersionName.apk")
+            output.outputFileName.set("CarPlay-v$appVersionName.apk")
         }
     }
 }
