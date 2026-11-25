@@ -9,6 +9,14 @@ import android.widget.TextView
 import com.shilapi.xcertplay.DiPlayPreferences
 import com.shilapi.xcertplay.AirPlayPersistence
 import com.geely.carplay.ui.widget.ConnectDiagramView
+import com.geely.carplay.ui.widget.IconView
+import com.shilapi.xcertplay.network.CarHotspotConfiguration
+import com.shilapi.xcertplay.network.CarHotspotReadResult
+import com.shilapi.xcertplay.network.CarHotspotState
+import com.shilapi.xcertplay.network.CarHotspotTools
+import com.shilapi.xcertplay.network.HotspotRadioFrequency
+import com.shilapi.xcertplay.network.wifiChannelToFrequencyMhz
+import com.shilapi.xcertplay.orchestration.ManualHotspotBand
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -37,7 +45,26 @@ class HomeActivity : Activity() {
         }
     }
 
-    private var deviceStateGeneration = 0
+    /** 刷新令牌会被后台线程递增 主线程读取 */
+    @Volatile private var deviceStateGeneration = 0
+    private val refreshLock = Any()
+    private var refreshInFlight = false
+    private var refreshPending = false
+
+    private lateinit var hotspotStateText: TextView
+    private lateinit var hotspotIcon: IconView
+    private lateinit var bluetoothIcon: IconView
+    private lateinit var deviceLabelText: TextView
+    private lateinit var deviceText: TextView
+    private lateinit var deviceDot: View
+    private lateinit var quickConnectButton: View
+    private lateinit var quickConnectLabel: View
+    private lateinit var connectActions: View
+    private lateinit var connectedActions: View
+    private lateinit var stateText: TextView
+    private lateinit var previewDiagram: ConnectDiagramView
+    private lateinit var hintText: TextView
+
     /** 首页状态刷新共用一条后台线程 避免每次刷新新建 Thread */
     private val background = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "home-background").apply { isDaemon = true }
@@ -57,15 +84,27 @@ class HomeActivity : Activity() {
             return
         }
         setContentView(R.layout.activity_home)
+        hotspotStateText = findViewById(R.id.home_hotspot_state)
+        hotspotIcon = findViewById(R.id.home_hotspot_icon)
+        bluetoothIcon = findViewById(R.id.home_bluetooth_icon)
+        deviceLabelText = findViewById(R.id.home_device_label)
+        deviceText = findViewById(R.id.home_device)
+        deviceDot = findViewById(R.id.home_device_dot)
+        quickConnectButton = findViewById(R.id.home_quick_connect)
+        quickConnectLabel = findViewById(R.id.home_quick_connect_label)
+        connectActions = findViewById(R.id.home_connect_actions)
+        connectedActions = findViewById(R.id.home_connected_actions)
+        stateText = findViewById(R.id.home_state)
+        previewDiagram = findViewById(R.id.home_preview)
+        hintText = findViewById(R.id.home_hint)
         val wideLayout = resources.getBoolean(R.bool.wide_layout)
         val detailVisibility = if (wideLayout) View.VISIBLE else View.GONE
-        findViewById<View>(R.id.home_preview).visibility = detailVisibility
+        previewDiagram.visibility = detailVisibility
         findViewById<View>(R.id.home_app_title).visibility = detailVisibility
-        findViewById<View>(R.id.home_hotspot_state).visibility = detailVisibility
-        findViewById<View>(R.id.home_bluetooth_state).visibility = detailVisibility
+        hotspotStateText.visibility = detailVisibility
 
         findViewById<View>(R.id.home_connect_button).setOnClickListener { connectPhone() }
-        findViewById<View>(R.id.home_quick_connect).setOnClickListener { quickConnect() }
+        quickConnectButton.setOnClickListener { quickConnect() }
         findViewById<View>(R.id.home_enter_carplay).setOnClickListener {
             if (CarPlaySessionManager.isExiting) return@setOnClickListener
             startActivity(Intent(this, CarPlayActivity::class.java))
@@ -192,7 +231,7 @@ class HomeActivity : Activity() {
     }
 
     private fun showHint(message: String) {
-        findViewById<TextView>(R.id.home_hint).text = message
+        hintText.text = message
     }
 
     private fun confirmExit() {
@@ -223,69 +262,135 @@ class HomeActivity : Activity() {
     private fun renderConnectionState() {
         val connected = CarPlaySessionManager.isConnected
 
-        findViewById<View>(R.id.home_connect_actions).visibility = if (connected) View.GONE else View.VISIBLE
-        findViewById<View>(R.id.home_connected_actions).visibility = if (connected) View.VISIBLE else View.GONE
-        findViewById<TextView>(R.id.home_state).setText(
+        connectActions.visibility = if (connected) View.GONE else View.VISIBLE
+        connectedActions.visibility = if (connected) View.VISIBLE else View.GONE
+        stateText.setText(
             if (connected) R.string.home_state_connected else R.string.home_wireless_state
         )
-        findViewById<ConnectDiagramView>(R.id.home_preview).setConnected(connected)
-        findViewById<TextView>(R.id.home_hint).text = when {
+        previewDiagram.setConnected(connected)
+        hintText.text = when {
             CarPlaySessionManager.isExiting -> getString(R.string.exit_closing)
             CarPlaySessionManager.statusText == CarPlaySessionManager.STATUS_IDLE -> getString(R.string.home_wireless_hint)
             else -> CarPlaySessionManager.statusText
         }
     }
 
+    /** 同一时间只跑一次刷新 期间的新请求合并成结束后再跑一次 */
     private fun refreshDeviceState() {
+        if (isFinishing || isDestroyed || background.isShutdown) return
+        synchronized(refreshLock) {
+            if (refreshInFlight) {
+                refreshPending = true
+                return
+            }
+            refreshInFlight = true
+        }
         val token = ++deviceStateGeneration
         val app = applicationContext
         val geely = AirPlayPersistence.loadGeelyBluetoothConnectionEnabled(app)
         val phoneAddress = DiPlayPreferences.phoneAddress(app)
         val phoneName = DiPlayPreferences.phoneName(app)
         background.execute {
-            val hotspot = com.shilapi.xcertplay.network.CarHotspotTools.readState(app)
-            val bluetooth = if (geely) null else runCatching {
-                (app.getSystemService(BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)?.adapter?.isEnabled
-            }.getOrNull()
-            val bluetoothOnline = phoneAddress != null && BluetoothOnline.isConnected(app, phoneAddress)
-            runOnUiThread {
-                if (token != deviceStateGeneration || isFinishing || isDestroyed) return@runOnUiThread
-                val sessionOnline = CarPlaySessionManager.isConnected
-                val online = sessionOnline || bluetoothOnline
-                renderLastDevice(phoneName, phoneAddress != null, online, sessionOnline)
-                renderQuickConnect(online)
-                val enabled = hotspot == com.shilapi.xcertplay.network.CarHotspotState.ENABLED
-                findViewById<TextView>(R.id.home_hotspot_state).text = when (hotspot) {
-                    com.shilapi.xcertplay.network.CarHotspotState.ENABLED -> "热点已开启"
-                    com.shilapi.xcertplay.network.CarHotspotState.ENABLING -> "热点启动中"
-                    null -> "热点状态未知"
-                    else -> "热点未开启"
+            try {
+                val hotspot = CarHotspotTools.readState(app)
+                val hotspotConfiguration = (CarHotspotTools.read(app) as? CarHotspotReadResult.Available)?.configuration
+                val hotspotFrequency = if (hotspot == CarHotspotState.ENABLED) {
+                    HotspotRadioFrequency.read()
+                        ?: hotspotConfiguration?.channel?.let(::wifiChannelToFrequencyMhz)
+                } else {
+                    null
                 }
-                findViewById<TextView>(R.id.home_transport).setText(
-                    if (geely) R.string.home_transport_geely else R.string.home_transport_system,
-                )
-                findViewById<TextView>(R.id.home_bluetooth_state).text = when (bluetooth) {
-                    true -> "已开启"
-                    false -> "未开启"
-                    null -> if (geely) "已开启" else "不可用"
+                val hotspotBand = hotspotBandLabel(hotspotConfiguration, hotspotFrequency)
+                val bluetooth = if (geely) null else runCatching {
+                    (app.getSystemService(BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)?.adapter?.isEnabled
+                }.getOrNull()
+                val bluetoothOnline = phoneAddress != null && BluetoothOnline.isConnected(app, phoneAddress)
+                runOnUiThread {
+                    if (token != deviceStateGeneration || isFinishing || isDestroyed) return@runOnUiThread
+                    val sessionOnline = CarPlaySessionManager.isConnected
+                    val online = sessionOnline || bluetoothOnline
+                    renderLastDevice(phoneName, phoneAddress != null, online, sessionOnline)
+                    renderQuickConnect(online)
+                    renderHotspotState(hotspot, hotspotBand)
+                    renderBluetoothState(geely, bluetooth)
                 }
-                findViewById<View>(R.id.home_hotspot_icon).contentDescription = findViewById<TextView>(R.id.home_hotspot_state).text
-                findViewById<View>(R.id.home_bluetooth_icon).contentDescription = findViewById<TextView>(R.id.home_bluetooth_state).text
-                val hotspotReady = enabled
-                val bluetoothReady = if (geely) true else bluetooth == true
-                findViewById<com.geely.carplay.ui.widget.IconView>(R.id.home_hotspot_icon).setIconTint(resources.getColor(if (hotspotReady) R.color.ok else R.color.warn))
-                findViewById<com.geely.carplay.ui.widget.IconView>(R.id.home_bluetooth_icon).setIconTint(resources.getColor(if (bluetoothReady) R.color.ok else R.color.warn))
-                findViewById<TextView>(R.id.home_hotspot_state).setTextColor(resources.getColor(if (hotspotReady) R.color.text_primary else R.color.warn))
-                findViewById<TextView>(R.id.home_bluetooth_state).setTextColor(resources.getColor(if (bluetoothReady) R.color.text_primary else R.color.warn))
+            } finally {
+                val rerun = synchronized(refreshLock) {
+                    refreshInFlight = false
+                    refreshPending.also { refreshPending = false }
+                }
+                if (rerun) refreshDeviceState()
             }
         }
     }
 
+    /** 热点胶囊文字只保留频段 开关状态由图标颜色表达 */
+    private fun renderHotspotState(hotspot: CarHotspotState?, bandResId: Int) {
+        val text = getString(bandResId)
+        hotspotStateText.apply {
+            this.text = text
+            setTextColor(resources.getColor(R.color.text_primary))
+        }
+        val tintResId = when (hotspot) {
+            CarHotspotState.ENABLED -> R.color.ok
+            CarHotspotState.DISABLED, CarHotspotState.DISABLING, CarHotspotState.FAILED -> R.color.warn
+            else -> R.color.text_secondary
+        }
+        hotspotIcon.setIconTint(resources.getColor(tintResId))
+        hotspotIcon.contentDescription = "$text ${hotspotStateLabel(hotspot)}"
+    }
+
+    /** 蓝牙胶囊只保留图标 状态由图标颜色表达 */
+    private fun renderBluetoothState(geely: Boolean, bluetooth: Boolean?) {
+        val source = getString(if (geely) R.string.home_bluetooth_factory else R.string.home_bluetooth_system)
+        val tintResId = when {
+            geely -> R.color.ok
+            bluetooth == true -> R.color.ok
+            bluetooth == false -> R.color.warn
+            else -> R.color.text_secondary
+        }
+        bluetoothIcon.setIconTint(resources.getColor(tintResId))
+        bluetoothIcon.contentDescription = "$source ${bluetoothStateLabel(geely, bluetooth)}"
+    }
+
+    /** 频段优先按驱动实际频率判断 其次热点配置 最后按信道 */
+    private fun hotspotBandLabel(
+        configuration: CarHotspotConfiguration?,
+        frequencyMHz: Int?,
+    ): Int {
+        val channel = configuration?.channel
+        return when {
+            frequencyMHz != null && frequencyMHz in 2400..2500 -> R.string.home_hotspot_band_2g
+            frequencyMHz != null && frequencyMHz in 4900..5900 -> R.string.home_hotspot_band_5g
+            configuration?.band == ManualHotspotBand.GHZ_5 -> R.string.home_hotspot_band_5g
+            configuration?.band == ManualHotspotBand.GHZ_2_4 -> R.string.home_hotspot_band_2g
+            channel != null && channel >= 32 -> R.string.home_hotspot_band_5g
+            channel != null && channel in 1..14 -> R.string.home_hotspot_band_2g
+            else -> R.string.home_hotspot_band_unknown
+        }
+    }
+
+    private fun hotspotStateLabel(state: CarHotspotState?): String = when (state) {
+        CarHotspotState.ENABLED -> "已开启"
+        CarHotspotState.ENABLING -> "启动中"
+        CarHotspotState.DISABLING -> "正在关闭"
+        CarHotspotState.DISABLED -> "未开启"
+        CarHotspotState.FAILED -> "异常"
+        else -> "状态未知"
+    }
+
+    private fun bluetoothStateLabel(geely: Boolean, bluetooth: Boolean?): String = when {
+        geely -> "原厂通道"
+        bluetooth == true -> "已开启"
+        bluetooth == false -> "未开启"
+        else -> "状态未知"
+    }
+
     /** 会话在线时标注当前连接 只有蓝牙在线时仍显示上次连接 */
     private fun renderLastDevice(name: String, hasDevice: Boolean, online: Boolean, connected: Boolean) {
-        findViewById<TextView>(R.id.home_device_label).text =
+        deviceLabelText.text =
             getString(if (connected) R.string.home_current_device else R.string.home_last_device)
-        findViewById<TextView>(R.id.home_device).apply {
+        deviceText.apply {
             text = when {
                 connected && !hasDevice -> "iPhone"
                 connected -> name
@@ -298,7 +403,7 @@ class HomeActivity : Activity() {
                 else -> R.color.text_secondary
             }))
         }
-        findViewById<View>(R.id.home_device_dot).setBackgroundResource(
+        deviceDot.setBackgroundResource(
             if (connected || (hasDevice && online)) R.drawable.dot_ok else R.drawable.dot_muted
         )
         android.util.Log.i(
@@ -309,8 +414,8 @@ class HomeActivity : Activity() {
 
     /** 上次设备不在线时快速连接置灰 同时退出焦点序列 */
     private fun renderQuickConnect(ready: Boolean) {
-        findViewById<View>(R.id.home_quick_connect).isEnabled = ready
-        findViewById<View>(R.id.home_quick_connect_label).isEnabled = ready
+        quickConnectButton.isEnabled = ready
+        quickConnectLabel.isEnabled = ready
     }
 
     private fun showClock() {

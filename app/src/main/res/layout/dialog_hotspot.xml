@@ -12,6 +12,7 @@
         android:padding="@dimen/gap_md">
 
         <TextView
+            android:id="@+id/hotspot_dialog_help"
             style="@style/Text.Caption"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

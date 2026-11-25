@@ -69,6 +69,14 @@ internal fun wifiChannelToFrequencyMhz(channel: Int, band: Int? = null): Int? = 
     else -> null
 }
 
+/** Converts a channel to MHz when the band is unknown, using the usual 2.4G and 5G ranges. */
+fun wifiChannelToFrequencyMhz(channel: Int): Int? = when {
+    channel == 14 -> 2484
+    channel in 1..13 -> 2407 + channel * 5
+    channel in 32..177 -> 5000 + channel * 5
+    else -> null
+}
+
 /** Maps Android's [android.net.wifi.SoftApConfiguration] band constants to a user-facing label. */
 internal fun wifiBandLabel(band: Int?): String? = when (band) {
     1 -> "2.4 GHz"

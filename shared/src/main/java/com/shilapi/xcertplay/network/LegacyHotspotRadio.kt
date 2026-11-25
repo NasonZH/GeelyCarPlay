@@ -2,6 +2,9 @@ package com.shilapi.xcertplay.network
 
 /** Read-only, ordinary-UID fallback for drivers with Wireless Extensions (not an AP setter). */
 internal object LegacyHotspotRadio {
+    /** 驱动只返回信道号时需要频段提示才能换算 与其它失败区分开 */
+    const val AMBIGUOUS_CHANNEL = "unrecognized driver frequency"
+
     data class Reading(val frequencyMHz: Int?, val error: String?)
 
     fun read(interfaceName: String, band: String?): Reading {
@@ -12,7 +15,7 @@ internal object LegacyHotspotRadio {
         if (raw.size != 3) return Reading(null, "invalid driver response")
         if (raw[0] != 0) return Reading(null, "driver frequency query errno=${raw[0]}")
         val frequency = decodeFrequency(raw[1], raw[2], band)
-        return Reading(frequency, if (frequency == null) "unrecognized driver frequency" else null)
+        return Reading(frequency, if (frequency == null) AMBIGUOUS_CHANNEL else null)
     }
 
     // iw_freq uses mantissa * 10^exponent Hz; some drivers return a channel number instead.

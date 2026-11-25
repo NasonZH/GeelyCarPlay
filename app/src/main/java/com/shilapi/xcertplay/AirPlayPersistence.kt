@@ -4,14 +4,11 @@ import android.content.Context
 import android.os.Build
 import com.geely.carplay.ui.R
 import com.shilapi.xcertplay.airplay.AirPlayDisplaySettings
-import com.shilapi.xcertplay.airplay.AirPlayPhysicalSizeBasis
 import com.shilapi.xcertplay.airplay.CarPlayDisplayScale
 import com.shilapi.xcertplay.airplay.CarPlayClusterDisplay
 import com.shilapi.xcertplay.airplay.CarPlayUiScale
 import com.shilapi.xcertplay.airplay.AirPlayIdentity
 import com.shilapi.xcertplay.airplay.PairingStore
-import com.shilapi.xcertplay.airplay.SafeAreaCodec
-import com.shilapi.xcertplay.airplay.SafeAreaRect
 import com.shilapi.xcertplay.orchestration.ManualHotspotBand
 import com.shilapi.xcertplay.orchestration.ManualHotspotSecurity
 import com.shilapi.xcertplay.orchestration.MfiTarget
@@ -69,14 +66,10 @@ object AirPlayPersistence {
     private const val KEY_CLUSTER_MARKER_X = "cluster_marker_horizontal_step"
     private const val KEY_CLUSTER_MARKER_Y = "cluster_marker_vertical_step"
     private const val KEY_CENTER_MAP_FOLLOWS_DASHBOARD = "center_map_follows_dashboard"
-    private const val KEY_WIDTH_PHYSICAL_MM = "display_width_physical_mm"
-    private const val KEY_PHYSICAL_SIZE_BASIS = "display_physical_size_basis"
     private const val KEY_MAX_DETECTED_WIDTH = "display_max_detected_width"
     private const val KEY_MAX_DETECTED_HEIGHT = "display_max_detected_height"
     private const val KEY_RIGHT_HAND_DRIVE = "right_hand_drive"
     private const val KEY_HIDE_TOP_BAR = "hide_top_bar"
-    private const val KEY_HIDE_BOTTOM_BAR = "hide_bottom_bar"
-    private const val KEY_SAFE_AREA_DRAW_OUTSIDE = "safe_area_draw_outside"
     private const val KEY_AUTO_START_ON_BOOT = "auto_start_on_boot"
     private const val KEY_LOCATION_REPORTING_ENABLED = "location_reporting_enabled"
     private const val KEY_MFI_TARGET = "mfi_target"
@@ -519,36 +512,6 @@ object AirPlayPersistence {
             .apply()
     }
 
-    fun loadWidthPhysicalMm(context: Context): Int =
-        AirPlayDisplaySettings.sanitizeWidthPhysicalMm(
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt(
-                KEY_WIDTH_PHYSICAL_MM,
-                com.shilapi.xcertplay.airplay.CarPlaySize.DEFAULT.widthMillimeters,
-            ),
-        )
-
-    fun saveWidthPhysicalMm(context: Context, widthPhysicalMm: Int) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putInt(
-                KEY_WIDTH_PHYSICAL_MM,
-                AirPlayDisplaySettings.sanitizeWidthPhysicalMm(widthPhysicalMm),
-            )
-            .apply()
-    }
-
-    fun loadPhysicalSizeBasis(context: Context): AirPlayPhysicalSizeBasis {
-        val stored = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_PHYSICAL_SIZE_BASIS, null)
-        return AirPlayPhysicalSizeBasis.entries.firstOrNull { it.name == stored }
-            ?: AirPlayDisplaySettings.DEFAULT_PHYSICAL_SIZE_BASIS
-    }
-
-    fun savePhysicalSizeBasis(context: Context, basis: AirPlayPhysicalSizeBasis) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString(KEY_PHYSICAL_SIZE_BASIS, basis.name)
-            .apply()
-    }
-
     fun loadMaximumDetectedDisplay(context: Context): Pair<Int, Int> {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         return prefs.getInt(KEY_MAX_DETECTED_WIDTH, 0) to
@@ -663,52 +626,6 @@ object AirPlayPersistence {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putBoolean(KEY_HIDE_TOP_BAR, hide)
             .apply()
-    }
-
-    fun loadHideBottomBar(context: Context): Boolean =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getBoolean(KEY_HIDE_BOTTOM_BAR, true)
-
-    fun saveHideBottomBar(context: Context, hide: Boolean) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putBoolean(KEY_HIDE_BOTTOM_BAR, hide)
-            .apply()
-    }
-
-    fun loadSafeAreaDrawOutside(context: Context): Boolean =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getBoolean(KEY_SAFE_AREA_DRAW_OUTSIDE, true)
-
-    fun saveSafeAreaDrawOutside(context: Context, drawOutside: Boolean) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putBoolean(KEY_SAFE_AREA_DRAW_OUTSIDE, drawOutside)
-            .apply()
-    }
-
-    fun loadSafeAreaRect(context: Context, widthPixels: Int, heightPixels: Int): SafeAreaRect? {
-        require(widthPixels > 0 && heightPixels > 0) { "Activity dimensions must be positive" }
-        return SafeAreaCodec.decode(
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .getString(safeAreaKey(widthPixels, heightPixels), null),
-        )
-    }
-
-    fun saveSafeAreaRect(
-        context: Context,
-        activityWidthPixels: Int,
-        activityHeightPixels: Int,
-        rect: SafeAreaRect,
-        commit: Boolean = false,
-    ) {
-        require(activityWidthPixels > 0 && activityHeightPixels > 0) {
-            "Activity dimensions must be positive"
-        }
-        val editor = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString(
-                safeAreaKey(activityWidthPixels, activityHeightPixels),
-                SafeAreaCodec.encode(rect.clampTo(activityWidthPixels, activityHeightPixels)),
-            )
-        if (commit) editor.commit() else editor.apply()
     }
 
     fun clearSafeAreaRect(

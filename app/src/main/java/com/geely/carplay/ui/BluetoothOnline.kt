@@ -18,9 +18,19 @@ import java.util.concurrent.TimeUnit
 object BluetoothOnline {
     private const val PROFILE_BIND_TIMEOUT_MILLIS = 400L
 
+    /** 已知地址优先查设备自身连接状态 未连接时才回退到 profile 列表 */
     fun isConnected(context: Context, address: String?): Boolean {
         if (address.isNullOrBlank()) return false
+        if (bondedDeviceConnected(context, address)) return true
         return connectedAddresses(context).any { it.equals(address, ignoreCase = true) }
+    }
+
+    private fun bondedDeviceConnected(context: Context, address: String): Boolean {
+        val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
+        if (adapter == null || !adapter.isEnabled) return false
+        val device = adapter.bondedDevices.orEmpty()
+            .firstOrNull { it.address.equals(address, ignoreCase = true) } ?: return false
+        return deviceConnected(device)
     }
 
     /** 返回当前已连接设备的蓝牙地址集合 需要在后台线程调用 */

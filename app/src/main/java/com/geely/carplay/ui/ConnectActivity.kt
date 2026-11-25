@@ -5,7 +5,6 @@ import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.view.View
-import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -19,7 +18,6 @@ import android.net.VpnService
 import android.provider.Settings
 import com.shilapi.xcertplay.AirPlayPersistence
 import com.shilapi.xcertplay.DiPlayPreferences
-import com.shilapi.xcertplay.network.CarHotspotFailure
 import com.shilapi.xcertplay.network.CarHotspotReadResult
 import com.shilapi.xcertplay.network.CarHotspotTools
 import com.shilapi.xcertplay.transport.AnwBluetoothBackend
@@ -37,8 +35,7 @@ class ConnectActivity : Activity() {
     private var renderedLogMessages: List<String> = emptyList()
     private var renderedStateSignature: Int? = null
     private var phoneLookupGeneration = 0
-    private var hotspotLookupGeneration = 0
-    private var hotspotReadFailure: CarHotspotFailure? = null
+    private var hotspotChecking = false
     private val stepHolders = mutableListOf<StepHolder>()
     private val connectionObserver: () -> Unit = {
         val wasConnected = connected
@@ -65,7 +62,6 @@ class ConnectActivity : Activity() {
         findViewById<View>(R.id.connect_back).setOnClickListener { finish() }
         findViewById<View>(R.id.choose_wireless).setOnClickListener { selectMode(Mode.WIRELESS) }
         findViewById<View>(R.id.choose_usb).setOnClickListener { selectMode(Mode.USB) }
-        findViewById<View>(R.id.hotspot_manual_button).setOnClickListener { editHotspot() }
         findViewById<View>(R.id.connect_action).setOnClickListener { onActionClick() }
 
         buildSteps()
@@ -79,12 +75,10 @@ class ConnectActivity : Activity() {
         super.onResume()
         CarPlaySessionManager.observe(connectionObserver)
         if (stepIndex == STEP_PHONE) buildIphoneList()
-        if (stepIndex == STEP_HOTSPOT) refreshHotspot()
     }
 
     override fun onPause() {
         phoneLookupGeneration++
-        hotspotLookupGeneration++
         CarPlaySessionManager.removeObserver(connectionObserver)
         super.onPause()
     }
@@ -232,76 +226,38 @@ class ConnectActivity : Activity() {
         val isOnline: Boolean = false,
     )
 
-    private fun refreshHotspot() {
-        val token = ++hotspotLookupGeneration
+    /** 无线连接前确认热点信息可用 系统可读时静默保存 读不到才要求手动填写 */
+    private fun ensureHotspotConfigured(onReady: () -> Unit) {
+        if (hotspotChecking) return
+        hotspotChecking = true
         val app = applicationContext
         Thread({
-            val result = CarHotspotTools.read(app)
+            val result = runCatching { CarHotspotTools.read(app) }.getOrNull()
+            if (result is CarHotspotReadResult.Failure) HotspotSettings.logReadFailure(result.reason)
+            val configured = when (result) {
+                is CarHotspotReadResult.Available -> {
+                    HotspotSettings.saveDetected(app, result.configuration)
+                    true
+                }
+                else -> AirPlayPersistence.loadManualHotspotSsid(app).isNotBlank()
+            }
             runOnUiThread {
-                if (token != hotspotLookupGeneration || isFinishing || isDestroyed) return@runOnUiThread
-                when (result) {
-                    is CarHotspotReadResult.Available -> {
-                        hotspotReadFailure = null
-                        HotspotSettings.saveDetected(this, result.configuration)
-                    }
-                    is CarHotspotReadResult.Failure -> {
-                        hotspotReadFailure = result.reason
-                        HotspotSettings.logReadFailure(result.reason)
-                    }
-                }
-                renderHotspot()
+                hotspotChecking = false
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (configured) onReady() else promptHotspotSettings()
             }
-        }, "carplay-hotspot-read").start()
+        }, "carplay-hotspot-check").start()
     }
 
-    private fun renderHotspot() {
-        val ssid = AirPlayPersistence.loadManualHotspotSsid(this)
-        val passphrase = AirPlayPersistence.loadManualHotspotPassphrase(this)
-        val saved = ssid.isNotBlank()
-        val failure = hotspotReadFailure
-        val hint = getString(if (saved) R.string.hotspot_saved_hint else R.string.hotspot_manual_hint)
-        findViewById<TextView>(R.id.hotspot_state).apply {
-            text = if (failure == null) hint else "${HotspotSettings.failureMessage(failure)}\n$hint"
-            setTextColor(color(if (failure == null) R.color.text_secondary else R.color.text_primary))
-        }
-        findViewById<TextView>(R.id.hotspot_ssid).text = if (saved) ssid else getString(R.string.hotspot_not_configured)
-        findViewById<TextView>(R.id.hotspot_password).text = when {
-            !saved -> getString(R.string.hotspot_not_configured)
-            passphrase.length > 0 -> "••••••••"
-            else -> getString(R.string.hotspot_open_network)
-        }
-        findViewById<TextView>(R.id.hotspot_manual_button).setText(
-            if (saved) R.string.hotspot_edit else R.string.hotspot_manual_title,
-        )
-    }
-
-    private fun editHotspot() {
-        hotspotLookupGeneration++
-        val builder = AlertDialog.Builder(this,
-            if (ThemeStore.isNight) AlertDialog.THEME_HOLO_DARK else AlertDialog.THEME_HOLO_LIGHT)
-        val form = android.view.LayoutInflater.from(builder.context).inflate(R.layout.dialog_hotspot, null)
-        val name = form.findViewById<EditText>(R.id.hotspot_name_input)
-        val password = form.findViewById<EditText>(R.id.hotspot_password_input)
-        name.setText(AirPlayPersistence.loadManualHotspotSsid(this))
-        password.setText(AirPlayPersistence.loadManualHotspotPassphrase(this))
-        val dialog = builder.setTitle(R.string.hotspot_manual_title)
-            .setView(form)
-            .setPositiveButton(R.string.hotspot_save, null)
+    private fun promptHotspotSettings() {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.hotspot_missing_title)
+            .setMessage(R.string.hotspot_missing_message)
+            .setPositiveButton(R.string.hotspot_go_settings) { _, _ ->
+                startActivity(SettingsActivity.hotspotIntent(this))
+            }
             .setNegativeButton(android.R.string.cancel, null)
-            .create()
-        dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                try {
-                    HotspotSettings.saveManual(this, name.text.toString(), password.text.toString())
-                    renderHotspot()
-                    dialog.dismiss()
-                    Toast.makeText(this, R.string.hotspot_saved_hint, Toast.LENGTH_LONG).show()
-                } catch (error: IllegalArgumentException) {
-                    Toast.makeText(this, error.message, Toast.LENGTH_LONG).show()
-                }
-            }
-        }
-        dialog.show()
+            .show()
     }
 
     private fun selectMode(newMode: Mode) {
@@ -311,10 +267,9 @@ class ConnectActivity : Activity() {
 
     private fun onActionClick() {
         when (stepIndex) {
-            STEP_CHOOSE -> stepTo(if (mode == Mode.USB) STEP_LINK else STEP_HOTSPOT)
-            STEP_HOTSPOT -> {
-                if (AirPlayPersistence.loadManualHotspotSsid(this).isBlank()) editHotspot()
-                else stepTo(STEP_PHONE)
+            STEP_CHOOSE -> when {
+                mode == Mode.USB -> stepTo(STEP_LINK)
+                else -> ensureHotspotConfigured { stepTo(STEP_PHONE) }
             }
             STEP_LINK -> when {
                 connected -> startCarPlay()
@@ -329,7 +284,6 @@ class ConnectActivity : Activity() {
         when (newIndex) {
             STEP_LINK -> startLinking()
             STEP_PHONE -> buildIphoneList()
-            STEP_HOTSPOT -> refreshHotspot()
         }
         render()
     }
@@ -348,6 +302,14 @@ class ConnectActivity : Activity() {
     }
 
     private fun prepareConnection() {
+        if (mode == Mode.WIRELESS && AirPlayPersistence.loadManualHotspotSsid(this).isBlank()) {
+            ensureHotspotConfigured { doPrepareConnection() }
+            return
+        }
+        doPrepareConnection()
+    }
+
+    private fun doPrepareConnection() {
         AirPlayPersistence.saveWirelessEnabled(this, mode == Mode.WIRELESS)
         if (mode == Mode.USB) {
             val consent = VpnService.prepare(this)
@@ -416,7 +378,6 @@ class ConnectActivity : Activity() {
     private fun renderPanel() {
         val activePanelId = when (stepIndex) {
             STEP_CHOOSE -> R.id.panel_choose
-            STEP_HOTSPOT -> R.id.panel_hotspot
             STEP_PHONE -> R.id.panel_phone
             else -> R.id.panel_link
         }
@@ -442,7 +403,7 @@ class ConnectActivity : Activity() {
     }
 
     private fun stepStateOf(index: Int): StepState {
-        if (mode == Mode.USB && (index == STEP_HOTSPOT || index == STEP_PHONE)) {
+        if (mode == Mode.USB && index == STEP_PHONE) {
             return StepState.SKIPPED
         }
         return when {
@@ -462,11 +423,6 @@ class ConnectActivity : Activity() {
                 actionView.visibility = View.VISIBLE
                 actionLabelView.setText(R.string.connect_next)
                 hintView.setText(R.string.connect_hint_choose)
-            }
-            STEP_HOTSPOT -> {
-                actionView.visibility = View.VISIBLE
-                actionLabelView.setText(R.string.connect_next)
-                hintView.setText(R.string.connect_hint_hotspot)
             }
             STEP_PHONE -> {
                 actionView.visibility = View.INVISIBLE
@@ -596,29 +552,25 @@ class ConnectActivity : Activity() {
         private const val VPN_REQUEST = 101
 
         private const val STEP_CHOOSE = 0
-        private const val STEP_HOTSPOT = 1
-        private const val STEP_PHONE = 2
-        private const val STEP_LINK = 3
+        private const val STEP_PHONE = 1
+        private const val STEP_LINK = 2
 
         private const val IPHONE_NAME = "iPhone"
 
         private val STEP_ICONS = arrayOf(
             IconView.Icon.SLIDERS,
-            IconView.Icon.WIFI,
             IconView.Icon.PHONE,
             IconView.Icon.CAST,
         )
 
         private val STEP_TITLE_RES = intArrayOf(
             R.string.connect_step_choose,
-            R.string.connect_step_hotspot,
             R.string.connect_step_phone,
             R.string.connect_step_linking,
         )
 
         private val PANEL_IDS = intArrayOf(
             R.id.panel_choose,
-            R.id.panel_hotspot,
             R.id.panel_phone,
             R.id.panel_link,
         )

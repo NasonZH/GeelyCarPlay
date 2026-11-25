@@ -2,6 +2,7 @@ package com.geely.carplay.ui
 
 import android.app.AlertDialog
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
@@ -17,6 +18,10 @@ import android.net.Uri
 import com.shilapi.xcertplay.AirPlayPersistence
 import com.shilapi.xcertplay.DiPlayPreferences
 import com.shilapi.xcertplay.media.MediaAudioBuffer
+import com.shilapi.xcertplay.network.CarHotspotConfiguration
+import com.shilapi.xcertplay.network.CarHotspotFailure
+import com.shilapi.xcertplay.network.CarHotspotReadResult
+import com.shilapi.xcertplay.network.CarHotspotTools
 import com.shilapi.xcertplay.orchestration.MfiTarget
 import com.geely.carplay.ui.widget.IconView
 import com.geely.carplay.ui.widget.SettingRowView
@@ -35,6 +40,8 @@ class SettingsActivity : Activity() {
     private val categoryHolders = mutableListOf<CategoryHolder>()
     private val groupHeaders = mutableListOf<View>()
     private val handler = Handler(Looper.getMainLooper())
+    private var hotspotRow: SettingRowView? = null
+    private var hotspotReading = false
 
     private var selectedCategory = 0
 
@@ -47,10 +54,9 @@ class SettingsActivity : Activity() {
             listOf(
                 SettingsItem.Toggle(R.string.settings_auto_connect, R.string.settings_auto_connect_desc),
                 SettingsItem.Toggle(R.string.settings_boot_start, R.string.settings_boot_start_desc),
-                SettingsItem.Link(R.string.settings_pick_iphone, R.string.settings_pick_iphone_desc, LinkAction.CONNECTION),
+                SettingsItem.Link(R.string.settings_hotspot, R.string.settings_hotspot_desc, LinkAction.HOTSPOT),
                 SettingsItem.Toggle(R.string.settings_geely_bluetooth, R.string.settings_geely_bluetooth_desc),
                 SettingsItem.Link(R.string.settings_authentication, R.string.settings_authentication_desc, LinkAction.AUTHENTICATION),
-                SettingsItem.Link(R.string.settings_open_connection, R.string.settings_open_connection_desc, LinkAction.CONNECTION),
             ),
         ),
         SettingsGroup(
@@ -149,8 +155,10 @@ class SettingsActivity : Activity() {
         scrollView.onScrolled = { onListScrolled() }
 
         renderGroups()
+        updateHotspotRow()
         renderCategories()
         applyCategorySelection(0)
+        if (intent.getBooleanExtra(EXTRA_OPEN_HOTSPOT, false)) openHotspotSettings()
     }
 
     override fun onDestroy() {
@@ -193,7 +201,7 @@ class SettingsActivity : Activity() {
             }
             is SettingsItem.Link -> {
                 row.bindLink(item.titleResId, item.descResId) { openLink(item.action) }
-                if (item.titleResId == R.string.settings_pick_iphone) row.updateDescription(DiPlayPreferences.phoneName(this))
+                if (item.action == LinkAction.HOTSPOT) hotspotRow = row
             }
             is SettingsItem.Theme -> row.bindChoice(
                 R.string.settings_theme,
@@ -297,10 +305,7 @@ class SettingsActivity : Activity() {
             R.string.settings_boot_start -> AirPlayPersistence.saveAutoStartOnBoot(this, value)
             R.string.settings_hevc -> AirPlayPersistence.saveHevcEnabled(this, value)
             R.string.settings_right_hand_drive -> AirPlayPersistence.saveRightHandDrive(this, value)
-            R.string.settings_fullscreen -> {
-                AirPlayPersistence.saveHideTopBar(this, value)
-                AirPlayPersistence.saveHideBottomBar(this, value)
-            }
+            R.string.settings_fullscreen -> AirPlayPersistence.saveHideTopBar(this, value)
             R.string.settings_audio_focus -> AirPlayPersistence.saveAudioFocusEnabled(this, value)
             R.string.settings_advanced_audio -> AirPlayPersistence.saveAdvancedAudioChannelMapping(this, value)
             R.string.settings_report_location -> AirPlayPersistence.saveLocationReportingEnabled(this, value)
@@ -354,7 +359,7 @@ class SettingsActivity : Activity() {
 
     private fun openLink(action: LinkAction) {
         when (action) {
-            LinkAction.CONNECTION -> startActivity(ConnectActivity.wirelessIntent(this))
+            LinkAction.HOTSPOT -> openHotspotSettings()
             LinkAction.PERMISSIONS -> openSystem(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
             LinkAction.BLUETOOTH -> openSystem(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
             LinkAction.AUTHENTICATION -> chooseAuthentication()
@@ -369,7 +374,7 @@ class SettingsActivity : Activity() {
                 val version = runCatching {
                     packageManager.getPackageInfo(packageName, 0).versionName
                 }.getOrNull() ?: "1.0.1"
-                showMessage("版本", "Geely CarPlay $version\n已接入 DiPlay 处理层")
+                showMessage("版本", "Geely CarPlay $version")
             }
             LinkAction.DEVICE -> showMessage("设备", "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}\nAndroid ${android.os.Build.VERSION.RELEASE}")
             LinkAction.LICENSES -> showMessage("开源许可", assets.open("open-source-notices.txt").bufferedReader().use { it.readText() })
@@ -422,6 +427,77 @@ class SettingsActivity : Activity() {
             .setNegativeButton("取消", null).show()
     }
 
+    /** 点击热点信息时先读系统配置 读到直接保存 读不到再让用户手动填写 */
+    private fun openHotspotSettings() {
+        if (hotspotReading) return
+        hotspotReading = true
+        val app = applicationContext
+        Thread({
+            val result = runCatching { CarHotspotTools.read(app) }.getOrNull()
+            runOnUiThread {
+                hotspotReading = false
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                when (result) {
+                    is CarHotspotReadResult.Available -> {
+                        HotspotSettings.saveDetected(this, result.configuration)
+                        updateHotspotRow()
+                        showHotspotDialog(result.configuration, null)
+                    }
+                    is CarHotspotReadResult.Failure -> showHotspotDialog(null, result.reason)
+                    null -> showHotspotDialog(null, CarHotspotFailure.OPERATION_FAILED)
+                }
+            }
+        }, "settings-hotspot-read").start()
+    }
+
+    private fun showHotspotDialog(detected: CarHotspotConfiguration?, failure: CarHotspotFailure?) {
+        val builder = AlertDialog.Builder(
+            this,
+            if (ThemeStore.isNight) AlertDialog.THEME_HOLO_DARK else AlertDialog.THEME_HOLO_LIGHT,
+        )
+        val form = android.view.LayoutInflater.from(builder.context).inflate(R.layout.dialog_hotspot, null)
+        val name = form.findViewById<EditText>(R.id.hotspot_name_input)
+        val password = form.findViewById<EditText>(R.id.hotspot_password_input)
+        val help = form.findViewById<TextView>(R.id.hotspot_dialog_help)
+        name.setText(detected?.ssid ?: AirPlayPersistence.loadManualHotspotSsid(this))
+        password.setText(detected?.passphrase ?: AirPlayPersistence.loadManualHotspotPassphrase(this))
+        help.text = if (failure == null) {
+            getString(R.string.settings_hotspot_read_ok)
+        } else {
+            getString(R.string.settings_hotspot_read_failed, HotspotSettings.failureMessage(failure))
+        }
+        val dialog = builder.setTitle(R.string.hotspot_manual_title)
+            .setView(form)
+            .setPositiveButton(R.string.hotspot_save, null)
+            .setNegativeButton(android.R.string.cancel, null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val ssid = name.text.toString()
+                val passphrase = password.text.toString()
+                try {
+                    // 读取成功时已保存系统配置 字段没改就不重复写入 避免覆盖频段信息
+                    val unchanged = detected != null && ssid == detected.ssid && passphrase == detected.passphrase
+                    if (!unchanged) HotspotSettings.saveManual(this, ssid, passphrase)
+                    updateHotspotRow()
+                    dialog.dismiss()
+                    Toast.makeText(this, R.string.hotspot_saved_hint, Toast.LENGTH_LONG).show()
+                } catch (error: IllegalArgumentException) {
+                    Toast.makeText(this, error.message, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+        dialog.show()
+    }
+
+    private fun updateHotspotRow() {
+        val ssid = AirPlayPersistence.loadManualHotspotSsid(this)
+        hotspotRow?.updateDescription(
+            if (ssid.isBlank()) getString(R.string.settings_hotspot_missing)
+            else getString(R.string.settings_hotspot_saved, ssid),
+        )
+    }
+
     private fun themeLabel(): String {
         return getString(if (ThemeStore.isNight) R.string.theme_dark else R.string.theme_light)
     }
@@ -431,7 +507,7 @@ class SettingsActivity : Activity() {
         return resources.getColor(colorResId)
     }
 
-    private enum class LinkAction { CONNECTION, PERMISSIONS, BLUETOOTH, AUTHENTICATION, REPORT, VERSION, DEVICE, LICENSES }
+    private enum class LinkAction { HOTSPOT, PERMISSIONS, BLUETOOTH, AUTHENTICATION, REPORT, VERSION, DEVICE, LICENSES }
 
     private sealed class SettingsItem {
         object Theme : SettingsItem()
@@ -448,8 +524,12 @@ class SettingsActivity : Activity() {
 
     private class CategoryHolder(val container: LinearLayout, val iconView: IconView, val titleView: TextView)
 
-    private companion object {
-        const val SCROLL_SYNC_DELAY_MS = 120L
-        const val SCROLL_SYNC_OFFSET = 60
+    companion object {
+        private const val EXTRA_OPEN_HOTSPOT = "open_hotspot"
+        private const val SCROLL_SYNC_DELAY_MS = 120L
+        private const val SCROLL_SYNC_OFFSET = 60
+
+        fun hotspotIntent(context: Context): Intent =
+            Intent(context, SettingsActivity::class.java).putExtra(EXTRA_OPEN_HOTSPOT, true)
     }
 }

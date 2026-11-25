@@ -66,7 +66,7 @@
                 android:layout_height="18dp"
                 android:id="@+id/home_hotspot_icon"
                 app:icon="wifi"
-                app:iconTint="@color/ok" />
+                app:iconTint="@color/text_tertiary" />
 
             <TextView
                 style="@style/Text.Caption"
@@ -74,23 +74,9 @@
                 android:layout_height="wrap_content"
                 android:layout_marginStart="@dimen/gap_xs"
                 android:id="@+id/home_hotspot_state"
-                android:text="@string/home_hotspot_state"
+                android:text="@string/home_hotspot_band_unknown"
                 android:textColor="@color/text_primary" />
         </LinearLayout>
-
-        <TextView
-            android:id="@+id/home_transport"
-            style="@style/Text.Caption"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginEnd="@dimen/gap_sm"
-            android:background="@drawable/bg_pill_brand"
-            android:paddingStart="@dimen/gap_md"
-            android:paddingTop="9dp"
-            android:paddingEnd="@dimen/gap_md"
-            android:paddingBottom="9dp"
-            android:text="@string/home_transport_system"
-            android:textColor="@color/brand" />
 
         <LinearLayout
             android:layout_width="wrap_content"
@@ -109,16 +95,7 @@
                 android:layout_height="18dp"
                 android:id="@+id/home_bluetooth_icon"
                 app:icon="bluetooth"
-                app:iconTint="@color/ok" />
-
-            <TextView
-                style="@style/Text.Caption"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="@dimen/gap_xs"
-                android:id="@+id/home_bluetooth_state"
-                android:text="@string/status_bluetooth"
-                android:textColor="@color/text_primary" />
+                app:iconTint="@color/text_tertiary" />
         </LinearLayout>
 
         <FrameLayout

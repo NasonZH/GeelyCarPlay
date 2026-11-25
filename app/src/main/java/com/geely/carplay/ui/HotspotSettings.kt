@@ -38,7 +38,7 @@ internal object HotspotSettings {
             is CarHotspotReadResult.Failure -> {
                 report(failureMessage(result.reason))
                 check(AirPlayPersistence.loadManualHotspotSsid(context).isNotBlank()) {
-                    "系统无法读取热点配置, 请在连接页点击填写热点信息"
+                    "系统无法读取热点配置, 请在设置页填写热点信息"
                 }
                 validateManual(
                     AirPlayPersistence.loadManualHotspotSsid(context),
