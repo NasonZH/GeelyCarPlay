@@ -10,7 +10,7 @@ android {
     compileSdk { version = release(37) }
 
     defaultConfig {
-        applicationId = "com.geely.carplay.ui"
+        applicationId = "com.carplay"
         minSdk = 18
         targetSdk = 18
         multiDexEnabled = true

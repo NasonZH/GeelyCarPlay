@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Geely CarPlay</string>
+    <string name="app_name">CarPlay</string>
 
     <!-- 启动页 -->
     <string name="splash_tagline">你的手机，畅享旅程。</string>

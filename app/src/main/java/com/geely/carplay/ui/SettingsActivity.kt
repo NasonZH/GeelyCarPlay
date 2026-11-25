@@ -374,7 +374,7 @@ class SettingsActivity : Activity() {
                 val version = runCatching {
                     packageManager.getPackageInfo(packageName, 0).versionName
                 }.getOrNull() ?: "1.0.1"
-                showMessage("版本", "Geely CarPlay $version")
+                showMessage("版本", "CarPlay $version")
             }
             LinkAction.DEVICE -> showMessage("设备", "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}\nAndroid ${android.os.Build.VERSION.RELEASE}")
             LinkAction.LICENSES -> showMessage("开源许可", assets.open("open-source-notices.txt").bufferedReader().use { it.readText() })

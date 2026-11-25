@@ -222,7 +222,7 @@ peak=0不能单独证明静音，需核对该解码路径是否维护此统计�
 
 ```bash
 /home/user/Android/Sdk/platform-tools/adb devices -l
-/home/user/Android/Sdk/platform-tools/adb -s <phone-serial> shell pidof com.geely.carplay.ui
+/home/user/Android/Sdk/platform-tools/adb -s <phone-serial> shell pidof com.carplay
 /home/user/Android/Sdk/platform-tools/adb -s <phone-serial> logcat -d -v threadtime -t 4000 GeelyCarPlay:V DiPlay-AudioStats:V DiPlay-VideoStats:V '*:S'
 ```
 

@@ -52,7 +52,7 @@
 | `shared` | 协议、传输、网络、媒体、JNI 和设备兼容 |
 | `vendor/jmdns` | 带 Android 4.3 兼容修复的 Bonjour |
 
-包名 `com.geely.carplay.ui`，minSdk/targetSdk 均为 18，compileSdk 37，Java 目标 11，启用 multidex。Kotlin 使用 AGP 内置支持。
+applicationId 为 `com.carplay`，Kotlin 包名与 namespace 仍为 `com.geely.carplay.ui`（JNI 和反射依赖），minSdk/targetSdk 均为 18，compileSdk 37，Java 目标 11，启用 multidex。Kotlin 使用 AGP 内置支持。
 
 ## 快速开始
 
