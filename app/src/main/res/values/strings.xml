@@ -158,7 +158,7 @@
     <string name="settings_save_report_desc">报告不会自动发送，不包含协议数据和凭据。</string>
 
     <string name="settings_version">版本</string>
-    <string name="settings_version_value">1.0.1</string>
+    <string name="settings_version_value">1.0.2</string>
     <string name="settings_device">车机</string>
     <string name="settings_device_value">GKUI 1.2 · Android 4.3 · 1920×720</string>
     <string name="settings_licenses">开源许可</string>
