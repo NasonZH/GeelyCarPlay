@@ -784,7 +784,7 @@ private class VideoDecoder(
 
     override fun close() {
         running = false
-        queue.discardFrames()
+        queue.stopAcceptingFrames()
         thread.interrupt()
     }
 
@@ -796,11 +796,16 @@ private class VideoDecoder(
                     when (job) {
                         is VideoJob.Config -> configureDecoder(job)
                         is VideoJob.Frame -> {
-                            if (System.nanoTime() - job.receivedNs > MAX_FRAME_AGE_NS) {
+                            try {
+                                if (System.nanoTime() - job.receivedNs > MAX_FRAME_AGE_NS) {
+                                    queue.discardFrames()
+                                    recover("video backlog exceeded 250 ms")
+                                } else {
+                                    feed(job.frame)
+                                }
+                            } finally {
                                 job.frame.release()
-                                queue.discardFrames()
-                                recover("video backlog exceeded 250 ms")
-                            } else feed(job.frame)
+                            }
                         }
                         is VideoJob.SurfaceChanged -> changeSurface(job.surface)
                         is VideoJob.DetachSurface -> {
@@ -832,6 +837,7 @@ private class VideoDecoder(
             } finally {
                 synchronized(lifecycleLock) {
                     running = false
+                    queue.stopAcceptingFrames()
                     queue.completeSurfaceDetaches()
                     stopped.countDown()
                 }
@@ -996,23 +1002,19 @@ private class VideoDecoder(
         val length = MediaCodecSupport.toAnnexB(bytes, frame.length)
         val config = lastConfig
         if (length <= 0) {
-            frame.release()
             recover("invalid video access unit")
             return
         }
         if (config == null || outputSurface == null) {
-            frame.release()
             return
         }
         if (!referenceChain.accepts(bytes, length, config.codec)) {
-            frame.release()
             requestKeyFrameIfDue()
             return
         }
         if (decoder == null) configureDecoder(config)
         val codec = decoder
         if (codec == null) {
-            frame.release()
             return
         }
         if (!submittedFrameLogged) {
@@ -1028,13 +1030,11 @@ private class VideoDecoder(
             dequeue = { codec.dequeueInputBuffer(INPUT_TIMEOUT_US) },
         )
         if (index < 0) {
-            frame.release()
             recover("video decoder input stalled")
             return
         }
         val input = inputBufferAt(codec, index)
         if (input == null) {
-            frame.release()
             recover("video decoder input buffer unavailable")
             return
         }
@@ -1044,11 +1044,9 @@ private class VideoDecoder(
             codec.queueInputBuffer(index, 0, length, System.nanoTime() / 1000, 0)
             referenceChain.onQueued()
         } else {
-            frame.release()
             recover("video frame exceeded codec input capacity")
             return
         }
-        frame.release()
         drainOutput(codec)
     }
 
@@ -1599,24 +1597,25 @@ private class AudioRenderer(
         when (format.codec) {
             AudioCodecKind.LPCM -> writePcm(byteSwapS16(rtp.copyOfRange(12, rtp.size)))
             AudioCodecKind.AAC_LC -> {
-                val accessUnit = rtp.copyOfRange(12, rtp.size)
-                if (accessUnit.isNotEmpty()) {
+                val offset = 12
+                val length = rtp.size - offset
+                if (length > 0) {
                     if (!firstAacPayloadLogged) {
                         firstAacPayloadLogged = true
                         Log.i(
                             TAG,
-                            "audio AAC access unit bytes=${accessUnit.size} " +
-                                "head=${accessUnit.copyOf(minOf(accessUnit.size, 16)).toHexString()}",
+                            "audio AAC access unit bytes=$length " +
+                                "head=${rtp.copyOfRange(offset, offset + minOf(length, 16)).toHexString()}",
                         )
                     }
-                    // Write the ADTS frame straight into the codec input buffer; fall back to an
-                    // allocated frame only when the codec cannot take input right now.
-                    if (codec == null || !feedAacDirect(rtp, 12, rtp.size - 12, timestampUs)) {
+                    if (!feedAacDirect(rtp, offset, length, timestampUs)) {
+                        val accessUnit = rtp.copyOfRange(offset, rtp.size)
                         feedCodec(
                             MediaCodecSupport.adtsFrame(accessUnit, format.sampleRate, format.channels),
                             timestampUs,
                         )
-                    }                }
+                    }
+                }
             }
             AudioCodecKind.OPUS -> {
                 val accessUnit = rtp.copyOfRange(12, rtp.size)

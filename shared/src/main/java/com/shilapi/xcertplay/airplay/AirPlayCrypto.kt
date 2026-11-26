@@ -130,14 +130,30 @@ object AirPlayCrypto {
         ciphertextLength: Int,
         aad: ByteArray,
         output: ByteArray,
-    ): Int {
-        val cipher = ChaCha20Poly1305()
-        cipher.init(false, AEADParameters(KeyParameter(key), MAC_BITS, nonce, aad))
-        val processed = cipher.processBytes(
-            ciphertextAndTag, ciphertextOffset, ciphertextLength, output, 0,
-        )
-        val finalized = cipher.doFinal(output, processed)
-        return processed + finalized
+    ): Int = StreamDecryptor(key).openInto(
+        nonce, ciphertextAndTag, ciphertextOffset, ciphertextLength, aad, output, 0,
+    )
+
+    /** 每条接收流独占实例 每个报文重新初始化 nonce 和认证状态 */
+    internal class StreamDecryptor(key: ByteArray) {
+        private val key = KeyParameter(key)
+        private val cipher = ChaCha20Poly1305()
+
+        fun openInto(
+            nonce: ByteArray,
+            ciphertextAndTag: ByteArray,
+            ciphertextOffset: Int,
+            ciphertextLength: Int,
+            aad: ByteArray,
+            output: ByteArray,
+            outputOffset: Int,
+        ): Int {
+            cipher.init(false, AEADParameters(key, MAC_BITS, nonce, aad))
+            val processed = cipher.processBytes(
+                ciphertextAndTag, ciphertextOffset, ciphertextLength, output, outputOffset,
+            )
+            return processed + cipher.doFinal(output, outputOffset + processed)
+        }
     }
 
     /** 12-byte nonce: four zero bytes followed by an eight-byte little-endian counter. */

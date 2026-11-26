@@ -184,6 +184,8 @@ class CarPlayController(
     )
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
     private val touchExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    private val inputLock = Any()
+    private var pendingTouchMove: PendingTouchMove? = null
     private val tunnelExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val hostId = UUID.randomUUID().toString().uppercase(Locale.US)
@@ -411,39 +413,66 @@ class CarPlayController(
         }
     }
 
-    fun sendTouch(contacts: List<AirPlayContact>): Boolean {
-        if (closed) return false
-        val session = activeSession ?: return false
-        return try {
-            touchExecutor.execute { session.sendTouch(contacts) }
-            true
-        } catch (_: Exception) {
-            false
-        }
+    fun sendTouch(contacts: List<AirPlayContact>): Boolean = enqueueInput { session, queuedAtNs ->
+        session.sendTouch(contacts, queuedAtNs)
     }
 
-    /** Sends one CarPlay media-button press (an [com.shilapi.xcertplay.airplay.AirPlayHid] media index). */
+    fun sendTouchMove(contacts: List<AirPlayContact>): Boolean = synchronized(inputLock) {
+        if (closed) return false
+        val session = activeSession ?: return false
+        val queuedAtNs = System.nanoTime()
+        val previous = pendingTouchMove
+        if (previous != null && previous.session === session) {
+            previous.contacts = contacts
+            previous.queuedAtNs = queuedAtNs
+            session.recordCoalescedTouchMove()
+            return true
+        }
+
+        val move = PendingTouchMove(session, contacts, queuedAtNs)
+        pendingTouchMove = move
+        val queued = submitInput {
+            synchronized(inputLock) {
+                if (pendingTouchMove === move) pendingTouchMove = null
+            }
+            if (!closed && activeSession === session) {
+                session.sendTouch(move.contacts, move.queuedAtNs, move.firstQueuedAtNs)
+            }
+        }
+        if (!queued) pendingTouchMove = null
+        queued
+    }
+
     /** Opens Siri on the iPhone, as the car's voice button does in CarPlay. */
-    fun requestSiri(): Boolean {
+    fun requestSiri(): Boolean = enqueueInput { session, _ -> session.invokeSiri() }
+
+    /** Sends one CarPlay media-button press. */
+    fun sendMediaButton(index: Int): Boolean = enqueueInput { session, _ -> session.sendMedia(index) }
+
+    private fun enqueueInput(send: (AirPlaySession, Long) -> Unit): Boolean = synchronized(inputLock) {
         if (closed) return false
         val session = activeSession ?: return false
-        return try {
-            touchExecutor.execute { session.invokeSiri() }
-            true
-        } catch (_: Exception) {
-            false
+        // 手势边界和按键保持原顺序 后续移动事件不能覆盖它们之前的坐标
+        pendingTouchMove = null
+        val queuedAtNs = System.nanoTime()
+        submitInput {
+            if (!closed && activeSession === session) send(session, queuedAtNs)
         }
     }
 
-    fun sendMediaButton(index: Int): Boolean {
-        if (closed) return false
-        val session = activeSession ?: return false
-        return try {
-            touchExecutor.execute { session.sendMedia(index) }
-            true
-        } catch (_: Exception) {
-            false
-        }
+    private fun submitInput(send: () -> Unit): Boolean = try {
+        touchExecutor.execute { send() }
+        true
+    } catch (_: java.util.concurrent.RejectedExecutionException) {
+        false
+    }
+
+    private class PendingTouchMove(
+        val session: AirPlaySession,
+        var contacts: List<AirPlayContact>,
+        val firstQueuedAtNs: Long,
+    ) {
+        var queuedAtNs = firstQueuedAtNs
     }
 
     override fun close() {
@@ -461,7 +490,10 @@ class CarPlayController(
         availabilityPollGeneration.incrementAndGet()
         wirelessGeneration.incrementAndGet()
         permissionPollGeneration += 1
-        touchExecutor.shutdownNow()
+        synchronized(inputLock) {
+            pendingTouchMove = null
+            touchExecutor.shutdownNow()
+        }
         tunnelExecutor.shutdownNow()
         val service = vpnService
         unbindVpn()

@@ -2,11 +2,11 @@ package com.shilapi.xcertplay.media
 
 import android.view.Surface
 import com.shilapi.xcertplay.airplay.VideoCodec
+import java.util.ArrayDeque
 import java.util.concurrent.CountDownLatch
-import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 internal sealed interface VideoJob {
     data class Config(val codec: VideoCodec, val codecData: ByteArray) : VideoJob
@@ -32,57 +32,78 @@ internal class VideoDecodeQueue(
     private val maxFrames: Int = 60,
     private val maxBytes: Int = 8 * 1024 * 1024,
 ) {
-    private val jobs = LinkedBlockingQueue<VideoJob>()
-    // 计数代替每帧遍历队列 解码线程取走时同步递减
-    private val frameCount = AtomicInteger(0)
-    private val frameBytes = AtomicLong(0)
+    private val lock = ReentrantLock()
+    private val available = lock.newCondition()
+    private val jobs = ArrayDeque<VideoJob>()
+    private var acceptingFrames = true
+    private var frameCount = 0
+    private var frameBytes = 0L
 
-    @Synchronized fun offer(job: VideoJob) {
+    fun offer(job: VideoJob) = lock.withLock {
         if (job is VideoJob.Frame) {
+            if (!acceptingFrames) {
+                job.frame.release()
+                return@withLock
+            }
             val length = job.frame.length
-            if (frameCount.get() >= maxFrames || frameBytes.get() + length > maxBytes) {
-                discardFrames()
-                jobs.offer(VideoJob.Resync)
+            if (frameCount >= maxFrames || frameBytes + length > maxBytes) {
+                discardFramesLocked()
+                jobs.addLast(VideoJob.Resync)
+                available.signal()
             }
             // A single oversized frame is also a lost reference chain.
             if (length > maxBytes) {
                 job.frame.release()
-                return
+                return@withLock
             }
-            frameCount.incrementAndGet()
-            frameBytes.addAndGet(length.toLong())
+            frameCount++
+            frameBytes += length
         }
-        jobs.offer(job)
+        jobs.addLast(job)
+        available.signal()
     }
 
-    @Synchronized fun discardFrames() {
-        // Collection.removeIf is a Java default method added in API 24; use the iterator on 4.3.
+    fun discardFrames() = lock.withLock { discardFramesLocked() }
+
+    fun stopAcceptingFrames() = lock.withLock {
+        if (!acceptingFrames) return@withLock
+        acceptingFrames = false
+        discardFramesLocked()
+    }
+
+    private fun discardFramesLocked() {
         val iterator = jobs.iterator()
         while (iterator.hasNext()) {
             when (val job = iterator.next()) {
                 is VideoJob.Frame -> {
-                    job.frame.release()
                     iterator.remove()
+                    job.frame.release()
                 }
                 is VideoJob.Resync -> iterator.remove()
                 else -> Unit
             }
         }
-        frameCount.set(0)
-        frameBytes.set(0)
+        frameCount = 0
+        frameBytes = 0
     }
 
-    fun completeSurfaceDetaches() {
-        jobs.filterIsInstance<VideoJob.DetachSurface>().forEach { it.completed.countDown() }
-    }
-
-    fun poll(timeoutMillis: Long): VideoJob? {
-        val job = jobs.poll(timeoutMillis, TimeUnit.MILLISECONDS)
-        if (job is VideoJob.Frame) {
-            if (frameCount.get() > 0) frameCount.decrementAndGet()
-            if (frameBytes.addAndGet(-job.frame.length.toLong()) < 0) frameBytes.set(0)
+    fun completeSurfaceDetaches() = lock.withLock {
+        for (job in jobs) {
+            if (job is VideoJob.DetachSurface) job.completed.countDown()
         }
-        return job
+    }
+
+    fun poll(timeoutMillis: Long): VideoJob? = lock.withLock {
+        var remaining = TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+        while (jobs.isEmpty() && remaining > 0L) {
+            remaining = available.awaitNanos(remaining)
+        }
+        val job = jobs.pollFirst()
+        if (job is VideoJob.Frame) {
+            frameCount--
+            frameBytes -= job.frame.length
+        }
+        job
     }
 }
 

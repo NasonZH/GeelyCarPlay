@@ -696,7 +696,13 @@ object CarPlaySessionManager {
     }
 
     fun sendTouch(event: MotionEvent, width: Int, height: Int): Boolean {
-        return controller?.sendTouch(CarPlayTouchMapper.contacts(event, width, height)) ?: false
+        val active = controller ?: return false
+        val contacts = CarPlayTouchMapper.contacts(event, width, height)
+        return if (event.actionMasked == MotionEvent.ACTION_MOVE) {
+            active.sendTouchMove(contacts)
+        } else {
+            active.sendTouch(contacts)
+        }
     }
 
     /** 仅转发已连接会话的媒体按键 入队成功不代表手机已执行 */

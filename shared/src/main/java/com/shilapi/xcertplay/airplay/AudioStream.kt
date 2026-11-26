@@ -34,12 +34,6 @@ class AudioStream(
     interface Listener {
         fun onStarted(firstSample: Int) {}
         fun onRtp(rtp: ByteArray, sample: Int) {}
-        fun onPacket(
-            wire: ByteArray,
-            rtp: ByteArray?,
-            sample: Int?,
-            error: Throwable?,
-        ) {}
     }
 
     private val closed = AtomicBoolean(false)
@@ -55,7 +49,10 @@ class AudioStream(
     private val aadBuffer = ByteArray(RTP_HEADER_LEN - 4)
     private val nonceBuffer = ByteArray(4 + NONCE_LEN)
 
-    fun listen(listener: Listener): Pair<Int, Int> {
+    fun listen(
+        listener: Listener,
+        capturePacket: ((wire: ByteArray, rtp: ByteArray?, sample: Int?, error: Throwable?) -> Unit)? = null,
+    ): Pair<Int, Int> {
         val data = bindAnyPort()
         // Keep short Wi-Fi bursts in the kernel while decrypting or scheduling pauses
         // the receive thread. The platform may cap this request; log the actual size.
@@ -72,7 +69,7 @@ class AudioStream(
             runCatching {
                 android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
             }
-            runData(data, listener)
+            runData(data, listener, capturePacket)
         }, "airplay-audio-rx").apply {
             isDaemon = true
             start()
@@ -92,36 +89,42 @@ class AudioStream(
         controlThread?.interrupt()
     }
 
-    private fun runData(socket: DatagramSocket, listener: Listener) {
+    private fun runData(
+        socket: DatagramSocket,
+        listener: Listener,
+        capturePacket: ((ByteArray, ByteArray?, Int?, Throwable?) -> Unit)?,
+    ) {
         val stats = StreamReceiveStats("audio type=$streamType", onDiagnostic)
         val buffer = ByteArray(DATAGRAM_BYTES)
+        val packet = DatagramPacket(buffer, buffer.size)
+        val decryptor = AirPlayCrypto.StreamDecryptor(key)
         try {
             while (!closed.get()) {
-                val packet = DatagramPacket(buffer, buffer.size)
                 try {
+                    packet.length = buffer.size
                     stats.reading()
                     socket.receive(packet)
                 } catch (_: Exception) {
                     if (closed.get()) return else continue
                 }
+                val wireSize = packet.length
                 stats.received(
-                    size = packet.length,
-                    sequence = if (packet.length >= RTP_HEADER_LEN) {
+                    size = wireSize,
+                    sequence = if (wireSize >= RTP_HEADER_LEN) {
                         ((buffer[2].toInt() and 0xff) shl 8) or (buffer[3].toInt() and 0xff)
                     } else null,
-                    timestamp = if (packet.length >= RTP_HEADER_LEN) readU32Be(buffer, 4) else null,
+                    timestamp = if (wireSize >= RTP_HEADER_LEN) readU32Be(buffer, 4) else null,
                 )
-                val wire = packet.data.copyOf(packet.length)
                 val packetNumber = receivedPackets.incrementAndGet()
-                if (wire.size < RTP_HEADER_LEN + TAIL_LEN) {
+                if (wireSize < RTP_HEADER_LEN + TAIL_LEN) {
                     if (packetNumber == 1) {
                         android.util.Log.w(
                             TAG,
-                            "audio stream type=$streamType short packet bytes=${wire.size}",
+                            "audio stream type=$streamType short packet bytes=$wireSize",
                         )
                     }
-                    listener.onPacket(
-                        wire,
+                    capturePacket?.invoke(
+                        buffer.copyOf(wireSize),
                         null,
                         null,
                         IOException("audio packet shorter than RTP header plus tail"),
@@ -130,19 +133,22 @@ class AudioStream(
                     continue
                 }
 
-                wire.copyInto(aadBuffer, 0, 4, RTP_HEADER_LEN)
-                val sealedEnd = wire.size - NONCE_LEN
-                wire.copyInto(nonceBuffer, 4, sealedEnd, wire.size)
-                val sample = readU32Be(wire, 4)
+                buffer.copyInto(aadBuffer, 0, 4, RTP_HEADER_LEN)
+                val sealedEnd = wireSize - NONCE_LEN
+                buffer.copyInto(nonceBuffer, 4, sealedEnd, wireSize)
+                val sample = readU32Be(buffer, 4)
 
-                val payload = try {
-                    AirPlayCrypto.chachaOpen(
-                        key,
+                // 输出由异步播放队列持有 接收缓冲在下一次取包时复用
+                val rtp = ByteArray(wireSize - TAIL_LEN)
+                val payloadSize = try {
+                    decryptor.openInto(
                         nonceBuffer,
-                        wire,
+                        buffer,
                         RTP_HEADER_LEN,
                         sealedEnd - RTP_HEADER_LEN,
                         aadBuffer,
+                        rtp,
+                        RTP_HEADER_LEN,
                     )
                 } catch (error: Exception) {
                     val failureNumber = authenticationFailures.incrementAndGet()
@@ -150,25 +156,22 @@ class AudioStream(
                         android.util.Log.w(
                             TAG,
                             "audio stream type=$streamType first decrypt failure " +
-                                "wire=${wire.toHexString()}",
+                                "wire=${buffer.copyOf(wireSize).toHexString()}",
                             error,
                         )
                     }
-                    listener.onPacket(wire, null, sample, error)
+                    capturePacket?.invoke(buffer.copyOf(wireSize), null, sample, error)
                     stats.processed()
                     continue
                 }
-                // 复用 RTP 头 一次分配代替 copyOf + 拼接
-                val rtp = ByteArray(RTP_HEADER_LEN + payload.size)
-                wire.copyInto(rtp, 0, 0, RTP_HEADER_LEN)
-                payload.copyInto(rtp, RTP_HEADER_LEN)
+                buffer.copyInto(rtp, 0, 0, RTP_HEADER_LEN)
                 val decryptedNumber = decryptedPackets.incrementAndGet()
                 if (decryptedNumber <= FIRST_PACKET_LOG_COUNT) {
                     android.util.Log.i(
                         TAG,
                         "audio stream type=$streamType packet=$decryptedNumber sample=$sample " +
-                            "wireBytes=${wire.size} payloadBytes=${payload.size} " +
-                            "payloadHead=${payload.copyOf(minOf(payload.size, 16)).toHexString()}",
+                            "wireBytes=$wireSize payloadBytes=$payloadSize " +
+                            "payloadHead=${rtp.copyOfRange(RTP_HEADER_LEN, RTP_HEADER_LEN + minOf(payloadSize, 16)).toHexString()}",
                     )
                 } else if (decryptedNumber % PACKET_LOG_INTERVAL == 0) {
                     android.util.Log.i(
@@ -177,7 +180,7 @@ class AudioStream(
                             "authFailures=${authenticationFailures.get()}",
                     )
                 }
-                listener.onPacket(wire, rtp, sample, null)
+                capturePacket?.invoke(buffer.copyOf(wireSize), rtp, sample, null)
                 if (!started) {
                     started = true
                     listener.onStarted(sample)
@@ -190,9 +193,11 @@ class AudioStream(
 
     private fun runControl(socket: DatagramSocket) {
         val buffer = ByteArray(DATAGRAM_BYTES)
+        val packet = DatagramPacket(buffer, buffer.size)
         while (!closed.get()) {
             try {
-                socket.receive(DatagramPacket(buffer, buffer.size))
+                packet.length = buffer.size
+                socket.receive(packet)
             } catch (_: Exception) {
                 if (closed.get()) return
             }

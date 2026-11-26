@@ -33,6 +33,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
     private val frameCounter = AtomicLong(0)
     private val firstFrameLogged = AtomicBoolean(false)
     private val nonceBuffer = ByteArray(AirPlayCrypto.NONCE_SIZE)
+    private val decryptor = AirPlayCrypto.StreamDecryptor(key)
     /** 复用密文负载缓冲 解密输出仍按帧分配 */
     private var bodyBuffer = ByteArray(INITIAL_BODY_BYTES)
     private var server: ServerSocket? = null
@@ -77,7 +78,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         val stats = StreamReceiveStats("video", onDiagnostic)
         try {
             val input = sock.getInputStream()
-            // 复用头部与负载缓冲 解密输出仍按帧分配 由解码队列持有
+            // 复用头部与负载缓冲 解密输出从帧池借出 由下游持有
             val headerBuffer = ByteArray(HEADER_LEN)
             while (!closed.get()) {
                 stats.reading()
@@ -124,17 +125,16 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
                 val frame = if (bodySize >= ScreenCodec.TAG_SIZE) {
                     val plainLength = bodySize - ScreenCodec.TAG_SIZE
                     val buffer = VideoFramePool.acquire(plainLength)
-                    val decoded = ScreenCodec.decryptFrameInto(
-                        key,
-                        frameCounter.get(),
-                        header,
-                        body,
-                        bodySize,
-                        nonceBuffer,
-                        buffer,
-                    ).also { frameCounter.incrementAndGet() }
-                    val annexBLength = ScreenCodec.lengthPrefixedToAnnexB(buffer, decoded)
-                    VideoFrame(buffer, annexBLength) { VideoFramePool.release(buffer) }
+                    try {
+                        val nonce = AirPlayCrypto.nonce64Into(frameCounter.get(), nonceBuffer)
+                        val decoded = decryptor.openInto(nonce, body, 0, bodySize, header, buffer, 0)
+                        frameCounter.incrementAndGet()
+                        val annexBLength = ScreenCodec.lengthPrefixedToAnnexB(buffer, decoded)
+                        VideoFrame(buffer, annexBLength) { VideoFramePool.release(buffer) }
+                    } catch (error: Exception) {
+                        VideoFramePool.release(buffer)
+                        throw error
+                    }
                 } else {
                     val buffer = VideoFramePool.acquire(bodySize)
                     body.copyInto(buffer, 0, 0, bodySize)

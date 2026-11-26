@@ -290,6 +290,8 @@ class HomeActivity : Activity() {
         stateText.setText(
             if (connected) R.string.home_state_connected else R.string.home_wireless_state
         )
+        val stateColor = if (connected) R.color.text_primary else R.color.brand
+        stateText.setTextColor(resources.getColor(stateColor))
         previewDiagram.setConnected(connected)
         hintText.text = when {
             CarPlaySessionManager.isExiting -> getString(R.string.exit_closing)

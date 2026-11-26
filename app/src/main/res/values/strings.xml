@@ -22,7 +22,7 @@
     <string name="exit_confirm">确认退出</string>
     <string name="exit_closing">正在断开连接并退出…</string>
     <string name="btn_back">返回</string>
-    <string name="home_wireless_state">尚未连接</string>
+    <string name="home_wireless_state">一键连接，安全出行</string>
     <string name="home_wireless_hint">打开车机热点和蓝牙，再点下方按钮连接手机。</string>
     <string name="home_streaming_device">正在投屏：%1$s</string>
     <string name="home_connected_devices">已连接蓝牙设备</string>

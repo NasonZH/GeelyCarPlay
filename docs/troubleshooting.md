@@ -302,20 +302,12 @@ TouchLatencyProbe 为全局对象，待测触摸未在新会话开始时清零�
 
 后续区分办法（本轮未实施，未修改代码）：打开设置页“详细日志”复现并对照 EOF 前的 `airplay rx/tx`；在设置里降帧率或分辨率做同条件对比；只读检查 wlan1 的 TCP 重传统计与热点频段信道；必要时取 iPhone 侧 sysdiagnose。以上均待验证，不构成已确认根因。
 
-## 性能优化待办（未实测）
+## 音视频与触摸性能优化（待实机验收）
 
-以下按预期收益排序，全部来自静态阅读源码，没有做过 A/B 实测。实施任何一项之前先用现有诊断确认收益，不能用估算代替验证；改完只算“源码编译通过”，效果仍需实机对比。
+视频队列使用同一把锁更新任务、帧数和字节数。积压清理只释放仍在队列里的帧，保留配置和 Surface 任务的顺序；解码线程在处理完各帧后释放该帧。队列关停后立即释放迟到帧的队列引用，Surface 分离仍在解码器解除绑定或退出后确认。视频头、网络负载和解密输出继续复用原有缓冲。
 
-已完成（2026-11-24）：触摸报文、RTSP 收发摘要和 iAP2 逐帧 trace 已归入设置页“详细日志”开关并默认静默；日志时间格式复用同一个 `SimpleDateFormat`；`DiagnosticRedactor` 合并两条丢弃正则，并在整行既无冒号也无点号时跳过地址替换。下面几项都没改动。
+音频接收线程复用 UDP 包对象，正常播放直接解密到播放队列持有的 RTP 缓冲。诊断抓包需要独立的原始报文副本。AAC 正常路径直接使用缓冲区中的载荷，回退路径按需复制。解码和输出采样率、声道配置不变。音视频接收流各自复用解密实例，每包仍以对应的 nonce 初始化并校验认证标签。
 
-1. 触摸逐事件发送。`CarPlayActivity.kt:117-121` 对每个 MotionEvent 调用 `CarPlaySessionManager.sendTouch`，`AirPlaySession.sendTouch:225` 每次做坐标缩放、HID 报文、bplist 编码、ChaCha 加密和 socket 写，滑动时 60–120 次/秒全部走一遍。日志已不是负担：触摸报文只在会话首条输出且需要打开详细日志。改法是合并同一帧周期内的 `ACTION_MOVE` 只发最后一个，或限频到 60Hz。风险在跟手性，需要用 `TouchLatencyProbe` 对比改动前后耗时；该探针是全局对象且不在新会话清零，跨会话样本不能直接比较。
+触摸发送线程只合并排在队尾且尚未发送的连续移动。按下、抬起、取消、多指切换、语音和媒体键保持原顺序。会话日志中，`touchMovesCoalesced` 是被新坐标替换的移动事件数，`touchQueueMaxMs` 从最终使用的坐标入队起算，`touchTaskQueueMaxMs` 从任务首次入队起算，两者均在开始处理时停止计时。原 `touch2frame` 探针仍不能证明下一帧包含触摸效果，跨会话残留样本不用于比较。
 
-2. 视频每帧新建 AEAD 实例。`AirPlayCrypto.chachaOpen:90-103` 每帧 `new ChaCha20Poly1305()`、`init`、分配输出数组，长度不符时再 `copyOf`。改法是复用实例或按密钥缓存。注意 BouncyCastle 每次 `init` 仍会重设密钥与状态，收益主要来自对象分配和多余拷贝，不是省掉加解密计算本身；纯 Java 的 ChaCha20-Poly1305 计算仍是主要开销，收益不足时只能考虑 JNI 实现，工程量大，未经评估不做。验证用 `DiPlay-VideoStats` 的 rx/shown、recoveries 和 CPU 单核快照。
-
-3. `VideoDecodeQueue` 每帧全队列扫描。`VideoDecodeQueue.kt:35-46` 每帧 `filterIsInstance<VideoJob.Frame>()` 分配一次列表再做 `sumOf`，队列上限 60 帧，30–60 次/秒。改法是维护 frameCount 与 frameBytes 两个计数器，在入队和 `discardFrames` 时同步更新，对外行为不变。`shared/src/test/.../VideoSurfaceDetachQueueTest.kt` 覆盖 Surface 分离路径，改动后应确认它仍然符合预期。
-
-4. 音频每包数组分配。`AudioStream.kt:105` 每包 `wire.copyOf`，`:124-128` 再三次 `copyOfRange` 和 `ByteArray(12)` nonce，另外每包新建 AEAD 实例，50–100 包/秒。改法是复用接收缓冲、nonce 与实例；包会被异步队列消费，复用缓冲前必须先确认所有权。验证用 `DiPlay-AudioStats` 的 underruns、queue、authFailures 和实际听感。
-
-5. 杂项。视频解码线程没有设置优先级：`AndroidMediaSink.kt:738` 创建 `carplay-video` 线程，而音频在 `:1262` 设了 `THREAD_PRIORITY_AUDIO`；视频线程可以试 `THREAD_PRIORITY_DISPLAY`，但要实测是否反过来抢占音频。`ScreenStream.readFully:138-148` 每帧分配 128 字节头部，可复用，收益很小。
-
-不在验证收益前做：JNI 重写 ChaCha20、修改协议参数、为性能新增设置项。
+实机验收固定热点频段、分辨率和帧率，比较 GC 次数与暂停时间、视频 `recoveries`、音频 `underruns` 和连续滑动时的跟手表现。上述改动的实机收益尚未确认。

@@ -85,6 +85,9 @@ class AirPlaySession(
     private val createdAt = SystemClock.elapsedRealtime()
     private val touchSent = AtomicLong()
     private val touchFailed = AtomicLong()
+    private val touchMovesCoalesced = AtomicLong()
+    @Volatile private var maxTouchQueueNs = 0L
+    @Volatile private var maxTouchTaskQueueNs = 0L
     private val touchWithContactsSent = AtomicLong()
     private val lastTouchSentAt = AtomicLong()
     private val closed = AtomicBoolean(false)
@@ -132,7 +135,9 @@ class AirPlaySession(
         val touchAge = if (lastTouchAt == 0L) -1L else now - lastTouchAt
         return "session=$diagnosticId ageMs=${now - createdAt} touchSent=${touchSent.get()} " +
             "touchFailed=${touchFailed.get()} touchWithContacts=${touchWithContactsSent.get()} " +
-            "lastTouchAgoMs=$touchAge ${ntp.diagnosticSummary()}"
+            "lastTouchAgoMs=$touchAge touchQueueMaxMs=${maxTouchQueueNs / 1_000_000} " +
+            "touchMovesCoalesced=${touchMovesCoalesced.get()} touchTaskQueueMaxMs=${maxTouchTaskQueueNs / 1_000_000} " +
+            ntp.diagnosticSummary()
     }
 
     fun start() {
@@ -222,7 +227,18 @@ class AirPlaySession(
         }
     }
 
-    fun sendTouch(contacts: List<AirPlayContact>): Boolean {
+    internal fun recordCoalescedTouchMove() {
+        touchMovesCoalesced.incrementAndGet()
+    }
+
+    fun sendTouch(
+        contacts: List<AirPlayContact>,
+        queuedAtNs: Long,
+        firstQueuedAtNs: Long = queuedAtNs,
+    ): Boolean {
+        val processingAtNs = System.nanoTime()
+        maxTouchQueueNs = maxOf(maxTouchQueueNs, processingAtNs - queuedAtNs)
+        maxTouchTaskQueueNs = maxOf(maxTouchTaskQueueNs, processingAtNs - firstQueuedAtNs)
         val scaled = contacts.map {
             it.copy(x = it.x * config.main.widthPixels, y = it.y * config.main.heightPixels)
         }

@@ -170,16 +170,8 @@ class CarPlayMediaEngine(
 
                 override fun onRtp(rtp: ByteArray, sample: Int) =
                     sink.onAudioRtp(streamId, format, rtp, sample)
-
-                override fun onPacket(
-                    wire: ByteArray,
-                    rtp: ByteArray?,
-                    sample: Int?,
-                    error: Throwable?,
-                ) {
-                    capture?.record(wire, rtp, sample, error)
-                }
             },
+            capture?.let { it::record },
         )
         streams[streamKey] = audio
         audioMeta[streamKey] = meta
