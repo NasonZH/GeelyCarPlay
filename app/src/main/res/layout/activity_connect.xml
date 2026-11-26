@@ -54,60 +54,19 @@
             android:textColor="@color/text_secondary" />
     </LinearLayout>
 
-    <LinearLayout
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:baselineAligned="false"
-        android:orientation="horizontal"
         android:paddingStart="@dimen/page_padding"
         android:paddingTop="@dimen/gap_md"
         android:paddingEnd="@dimen/page_padding">
 
-        <ScrollView
-            android:id="@+id/connect_sidebar_scroll"
-            android:layout_width="@dimen/connect_sidebar_width"
-            android:layout_height="match_parent"
-            android:scrollbars="vertical">
-            <LinearLayout
-                android:id="@+id/connect_steps"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical" />
-        </ScrollView>
-
-        <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_marginStart="@dimen/gap_lg"
-            android:layout_weight="1"
-            android:orientation="vertical">
-
-            <FrameLayout
-                android:layout_width="match_parent"
-                android:layout_height="0dp"
-                android:layout_weight="1">
-
-                <include
-                    android:id="@+id/panel_choose"
-                    layout="@layout/connect_panel_choose"
-                    android:layout_width="match_parent"
-                    android:layout_height="match_parent" />
-
-                <include
-                    android:id="@+id/panel_phone"
-                    layout="@layout/connect_panel_phone"
-                    android:layout_width="match_parent"
-                    android:layout_height="match_parent" />
-
-                <include
-                    android:id="@+id/panel_link"
-                    layout="@layout/connect_panel_link"
-                    android:layout_width="match_parent"
-                    android:layout_height="match_parent" />
-            </FrameLayout>
-        </LinearLayout>
-    </LinearLayout>
+        <include
+            layout="@layout/connect_panel_link"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+    </FrameLayout>
 
     <LinearLayout
         android:layout_width="match_parent"

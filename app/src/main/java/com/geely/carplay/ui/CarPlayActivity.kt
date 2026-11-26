@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.graphics.SurfaceTexture
 import android.os.Bundle
+import android.view.KeyEvent
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -26,6 +27,8 @@ class CarPlayActivity : Activity() {
     private var textureUpdated = false
     private var frameAvailable = false
     private var sawConnected = false
+    /** 只接管已成功入队的按键配对 避免长按重复发送或松开事件落到原播放器 */
+    private val handledMediaKeys = mutableSetOf<Int>()
     private val observer: () -> Unit = { onSessionChanged() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -61,9 +64,22 @@ class CarPlayActivity : Activity() {
     }
 
     override fun onPause() {
+        handledMediaKeys.clear()
         CarPlaySessionManager.noteScreenResumed(false)
         CarPlaySessionManager.removeObserver(observer)
         super.onPause()
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_UP && handledMediaKeys.remove(event.keyCode)) return true
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            if (event.keyCode in handledMediaKeys) return true
+            if (event.repeatCount == 0 && CarPlaySessionManager.sendMediaKey(event.keyCode)) {
+                handledMediaKeys.add(event.keyCode)
+                return true
+            }
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     private fun showSurfaceView() {

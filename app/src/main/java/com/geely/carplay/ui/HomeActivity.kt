@@ -4,19 +4,19 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
 import android.view.View
 import android.widget.TextView
-import com.shilapi.xcertplay.DiPlayPreferences
-import com.shilapi.xcertplay.AirPlayPersistence
 import com.geely.carplay.ui.widget.ConnectDiagramView
 import com.geely.carplay.ui.widget.IconView
-import com.shilapi.xcertplay.network.CarHotspotConfiguration
-import com.shilapi.xcertplay.network.CarHotspotReadResult
+import com.shilapi.xcertplay.AirPlayPersistence
+import com.shilapi.xcertplay.DiPlayPreferences
 import com.shilapi.xcertplay.network.CarHotspotState
 import com.shilapi.xcertplay.network.CarHotspotTools
-import com.shilapi.xcertplay.network.HotspotRadioFrequency
-import com.shilapi.xcertplay.network.wifiChannelToFrequencyMhz
-import com.shilapi.xcertplay.orchestration.ManualHotspotBand
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -24,11 +24,14 @@ import java.util.concurrent.Executors
 
 /**
  * 首页和真实会话状态保持同步
+ * 页面每两秒刷新热点和蓝牙状态 只显示当前蓝牙已连接的手机
  */
 class HomeActivity : Activity() {
 
     private var sessionConnected = false
     private var appliedNightTheme = false
+    private var resumed = false
+    private var autoConnectAttempted = false
 
     private val connectionObserver: () -> Unit = {
         renderConnectionState()
@@ -45,20 +48,15 @@ class HomeActivity : Activity() {
         }
     }
 
-    /** 刷新令牌会被后台线程递增 主线程读取 */
-    @Volatile private var deviceStateGeneration = 0
-    private val refreshLock = Any()
+    /** 刷新结果只在首页仍处于前台且代次一致时应用 */
+    private var deviceStateGeneration = 0
     private var refreshInFlight = false
     private var refreshPending = false
 
-    private lateinit var hotspotStateText: TextView
     private lateinit var hotspotIcon: IconView
     private lateinit var bluetoothIcon: IconView
-    private lateinit var deviceLabelText: TextView
-    private lateinit var deviceText: TextView
-    private lateinit var deviceDot: View
-    private lateinit var quickConnectButton: View
-    private lateinit var quickConnectLabel: View
+    private lateinit var deviceLabel: View
+    private lateinit var deviceNames: TextView
     private lateinit var connectActions: View
     private lateinit var connectedActions: View
     private lateinit var stateText: TextView
@@ -68,6 +66,14 @@ class HomeActivity : Activity() {
     /** 首页状态刷新共用一条后台线程 避免每次刷新新建 Thread */
     private val background = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "home-background").apply { isDaemon = true }
+    }
+
+    private val pollHandler = Handler(Looper.getMainLooper())
+    private val pollTick = object : Runnable {
+        override fun run() {
+            refreshDeviceState()
+            pollHandler.postDelayed(this, POLL_INTERVAL_MILLIS)
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -83,15 +89,12 @@ class HomeActivity : Activity() {
             android.os.Process.killProcess(android.os.Process.myPid())
             return
         }
+        autoConnectAttempted = savedInstanceState?.getBoolean(STATE_AUTO_CONNECT_ATTEMPTED) ?: false
         setContentView(R.layout.activity_home)
-        hotspotStateText = findViewById(R.id.home_hotspot_state)
         hotspotIcon = findViewById(R.id.home_hotspot_icon)
         bluetoothIcon = findViewById(R.id.home_bluetooth_icon)
-        deviceLabelText = findViewById(R.id.home_device_label)
-        deviceText = findViewById(R.id.home_device)
-        deviceDot = findViewById(R.id.home_device_dot)
-        quickConnectButton = findViewById(R.id.home_quick_connect)
-        quickConnectLabel = findViewById(R.id.home_quick_connect_label)
+        deviceLabel = findViewById(R.id.home_connected_devices_label)
+        deviceNames = findViewById(R.id.home_device_list)
         connectActions = findViewById(R.id.home_connect_actions)
         connectedActions = findViewById(R.id.home_connected_actions)
         stateText = findViewById(R.id.home_state)
@@ -101,10 +104,9 @@ class HomeActivity : Activity() {
         val detailVisibility = if (wideLayout) View.VISIBLE else View.GONE
         previewDiagram.visibility = detailVisibility
         findViewById<View>(R.id.home_app_title).visibility = detailVisibility
-        hotspotStateText.visibility = detailVisibility
 
-        findViewById<View>(R.id.home_connect_button).setOnClickListener { connectPhone() }
-        quickConnectButton.setOnClickListener { quickConnect() }
+        findViewById<View>(R.id.home_connect_button).setOnClickListener { connectWireless() }
+        findViewById<View>(R.id.home_usb_button).setOnClickListener { connectUsb() }
         findViewById<View>(R.id.home_enter_carplay).setOnClickListener {
             if (CarPlaySessionManager.isExiting) return@setOnClickListener
             startActivity(Intent(this, CarPlayActivity::class.java))
@@ -126,6 +128,7 @@ class HomeActivity : Activity() {
             recreate()
             return
         }
+        resumed = true
         showClock()
         sessionConnected = CarPlaySessionManager.isConnected
         refreshDeviceState()
@@ -134,66 +137,83 @@ class HomeActivity : Activity() {
             addAction(android.bluetooth.BluetoothDevice.ACTION_ACL_DISCONNECTED)
         })
         CarPlaySessionManager.observe(connectionObserver)
-        if (!CarPlaySessionManager.isRunning && CarPlaySessionManager.automaticConnectionAllowed && DiPlayPreferences.autoConnect(this)) {
-            if (!AirPlayPersistence.loadWirelessEnabled(this) || DiPlayPreferences.phoneAddress(this) != null) {
-                if (!AirPlayPersistence.loadWirelessEnabled(this) && android.net.VpnService.prepare(this) != null) {
-                    startActivity(ConnectActivity.usbIntent(this))
-                } else {
-                    CarPlaySessionManager.connect(this)
-                }
+        pollHandler.removeCallbacks(pollTick)
+        pollHandler.postDelayed(pollTick, POLL_INTERVAL_MILLIS)
+        if (!autoConnectAttempted && !CarPlaySessionManager.isRunning &&
+            CarPlaySessionManager.automaticConnectionAllowed && DiPlayPreferences.autoConnect(this)) {
+            val wireless = AirPlayPersistence.loadWirelessEnabled(this)
+            if (!wireless || DiPlayPreferences.phoneAddress(this) != null) {
+                autoConnectAttempted = true
+                startActivity(if (wireless) ConnectActivity.wirelessIntent(this) else ConnectActivity.usbIntent(this))
             }
         }
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean(STATE_AUTO_CONNECT_ATTEMPTED, autoConnectAttempted)
+        super.onSaveInstanceState(outState)
+    }
+
     override fun onPause() {
+        resumed = false
+        refreshPending = false
+        pollHandler.removeCallbacks(pollTick)
         deviceStateGeneration++
         runCatching { unregisterReceiver(bluetoothReceiver) }
         CarPlaySessionManager.removeObserver(connectionObserver)
         super.onPause()
     }
 
-    /** 连接手机：先确认热点和蓝牙已开启，再进入连接页 */
-    private fun connectPhone() {
+    /** 无线连接前先确认热点和蓝牙已开启 再读取当前在线设备 */
+    private fun connectWireless() {
         if (CarPlaySessionManager.isExiting) return
-        ensureWirelessReady {
+        autoConnectAttempted = true
+        if (CarPlaySessionManager.isRunning) {
             startActivity(ConnectActivity.wirelessIntent(this))
+            return
         }
+        ensureWirelessReady { chooseWirelessDevice() }
+    }
+
+    /** USB 连接不检查热点和蓝牙 直接进入连接日志页 */
+    private fun connectUsb() {
+        if (CarPlaySessionManager.isExiting) return
+        autoConnectAttempted = true
+        startActivity(ConnectActivity.usbIntent(this))
     }
 
     /**
-     * 快速连接最近连接过的在线设备
-     * 优先上一次连接的设备 不在线时在历史里找其他在线设备
-     * 没有在线设备时只提示 不发起连接
+     * 读取当前蓝牙已连接的手机
+     * 一台直接连接 多台弹窗选择 没有设备时只提示 不发起连接
      */
-    private fun quickConnect() {
-        if (CarPlaySessionManager.isExiting || CarPlaySessionManager.isRunning) return
-        ensureWirelessReady { connectRecentPhone() }
-    }
-
-    private fun connectRecentPhone() {
-        val history = DiPlayPreferences.phoneHistory(this)
-        if (history.isEmpty()) {
-            showHint(getString(R.string.quick_connect_no_history))
-            return
-        }
+    private fun chooseWirelessDevice() {
+        val app = applicationContext
+        val geely = AirPlayPersistence.loadGeelyBluetoothConnectionEnabled(app)
         background.execute {
-            val target = history.firstOrNull { BluetoothOnline.isConnected(this, it.address) }
+            val devices = runCatching { BluetoothOnline.connectedDevices(app) }.getOrDefault(emptyList())
             runOnUiThread {
-                if (isFinishing || isDestroyed) return@runOnUiThread
-                if (target == null) {
-                    showHint(getString(R.string.quick_connect_offline))
-                    return@runOnUiThread
+                if (!resumed || isFinishing || isDestroyed) return@runOnUiThread
+                when {
+                    devices.isEmpty() -> showHint(getString(R.string.home_no_connected_phone))
+                    devices.size == 1 -> connectDevice(devices.first(), geely)
+                    else -> showDeviceChooser(devices, geely)
                 }
-                DiPlayPreferences.savePhone(
-                    this,
-                    target.address,
-                    target.name,
-                    AirPlayPersistence.loadGeelyBluetoothConnectionEnabled(this),
-                )
-                startActivity(ConnectActivity.wirelessIntent(this)
-                    .putExtra(ConnectActivity.EXTRA_QUICK_CONNECT, true))
             }
         }
+    }
+
+    private fun showDeviceChooser(devices: List<ConnectedDevice>, geely: Boolean) {
+        val names = devices.map { it.name }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle(R.string.home_choose_device_title)
+            .setItems(names) { _, index -> connectDevice(devices[index], geely) }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun connectDevice(device: ConnectedDevice, geely: Boolean) {
+        DiPlayPreferences.savePhone(this, device.address, device.name, geely)
+        startActivity(ConnectActivity.wirelessIntent(this))
     }
 
     /**
@@ -205,15 +225,16 @@ class HomeActivity : Activity() {
         val app = applicationContext
         val geely = AirPlayPersistence.loadGeelyBluetoothConnectionEnabled(app)
         background.execute {
-            val hotspot = com.shilapi.xcertplay.network.CarHotspotTools.readState(app)
-            val hotspotBlocked = hotspot == com.shilapi.xcertplay.network.CarHotspotState.DISABLED ||
-                hotspot == com.shilapi.xcertplay.network.CarHotspotState.DISABLING ||
-                hotspot == com.shilapi.xcertplay.network.CarHotspotState.FAILED
+            val hotspot = CarHotspotTools.readState(app)
+            val hotspotBlocked = hotspot == CarHotspotState.ENABLING ||
+                hotspot == CarHotspotState.DISABLED ||
+                hotspot == CarHotspotState.DISABLING ||
+                hotspot == CarHotspotState.FAILED
             val bluetoothBlocked = if (geely) false else runCatching {
                 (app.getSystemService(BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)?.adapter?.isEnabled == false
             }.getOrDefault(false)
             runOnUiThread {
-                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (!resumed || isFinishing || isDestroyed) return@runOnUiThread
                 when {
                     hotspotBlocked && bluetoothBlocked -> showConnectBlocked(R.string.home_need_hotspot_bluetooth)
                     hotspotBlocked -> showConnectBlocked(R.string.home_need_hotspot)
@@ -262,6 +283,8 @@ class HomeActivity : Activity() {
     private fun renderConnectionState() {
         val connected = CarPlaySessionManager.isConnected
 
+        deviceLabel.visibility = if (connected) View.GONE else View.VISIBLE
+        deviceNames.visibility = if (connected) View.GONE else View.VISIBLE
         connectActions.visibility = if (connected) View.GONE else View.VISIBLE
         connectedActions.visibility = if (connected) View.VISIBLE else View.GONE
         stateText.setText(
@@ -270,74 +293,83 @@ class HomeActivity : Activity() {
         previewDiagram.setConnected(connected)
         hintText.text = when {
             CarPlaySessionManager.isExiting -> getString(R.string.exit_closing)
+            connected -> connectedHint()
             CarPlaySessionManager.statusText == CarPlaySessionManager.STATUS_IDLE -> getString(R.string.home_wireless_hint)
             else -> CarPlaySessionManager.statusText
         }
     }
 
+    private fun connectedHint(): CharSequence {
+        if (!AirPlayPersistence.loadWirelessEnabled(this)) return getString(R.string.carplay_ready_hint)
+        val address = DiPlayPreferences.phoneAddress(this) ?: return getString(R.string.carplay_ready_hint)
+        val name = DiPlayPreferences.phoneName(this).ifBlank { address }
+        val message = getString(R.string.home_streaming_device, name)
+        val nameStart = message.lastIndexOf(name)
+        return SpannableString(message).apply {
+            setSpan(ForegroundColorSpan(resources.getColor(R.color.ok)),
+                nameStart, nameStart + name.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+    }
+
     /** 同一时间只跑一次刷新 期间的新请求合并成结束后再跑一次 */
     private fun refreshDeviceState() {
-        if (isFinishing || isDestroyed || background.isShutdown) return
-        synchronized(refreshLock) {
-            if (refreshInFlight) {
-                refreshPending = true
-                return
-            }
-            refreshInFlight = true
+        if (!resumed || isFinishing || isDestroyed || background.isShutdown) return
+        if (refreshInFlight) {
+            refreshPending = true
+            return
         }
+        refreshInFlight = true
         val token = ++deviceStateGeneration
         val app = applicationContext
         val geely = AirPlayPersistence.loadGeelyBluetoothConnectionEnabled(app)
-        val phoneAddress = DiPlayPreferences.phoneAddress(app)
-        val phoneName = DiPlayPreferences.phoneName(app)
         background.execute {
             try {
                 val hotspot = CarHotspotTools.readState(app)
-                val hotspotConfiguration = (CarHotspotTools.read(app) as? CarHotspotReadResult.Available)?.configuration
-                val hotspotFrequency = if (hotspot == CarHotspotState.ENABLED) {
-                    HotspotRadioFrequency.read()
-                        ?: hotspotConfiguration?.channel?.let(::wifiChannelToFrequencyMhz)
-                } else {
-                    null
-                }
-                val hotspotBand = hotspotBandLabel(hotspotConfiguration, hotspotFrequency)
                 val bluetooth = if (geely) null else runCatching {
                     (app.getSystemService(BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)?.adapter?.isEnabled
                 }.getOrNull()
-                val bluetoothOnline = phoneAddress != null && BluetoothOnline.isConnected(app, phoneAddress)
+                val devices = if (!geely && bluetooth == false) {
+                    emptyList()
+                } else {
+                    runCatching { BluetoothOnline.connectedDevices(app) }.getOrDefault(emptyList())
+                }
                 runOnUiThread {
                     if (token != deviceStateGeneration || isFinishing || isDestroyed) return@runOnUiThread
-                    val sessionOnline = CarPlaySessionManager.isConnected
-                    val online = sessionOnline || bluetoothOnline
-                    renderLastDevice(phoneName, phoneAddress != null, online, sessionOnline)
-                    renderQuickConnect(online)
-                    renderHotspotState(hotspot, hotspotBand)
+                    renderDeviceList(devices)
+                    renderHotspotState(hotspot)
                     renderBluetoothState(geely, bluetooth)
                 }
             } finally {
-                val rerun = synchronized(refreshLock) {
+                runOnUiThread {
                     refreshInFlight = false
-                    refreshPending.also { refreshPending = false }
+                    val rerun = refreshPending
+                    refreshPending = false
+                    if (rerun) refreshDeviceState()
                 }
-                if (rerun) refreshDeviceState()
             }
         }
     }
 
-    /** 热点胶囊文字只保留频段 开关状态由图标颜色表达 */
-    private fun renderHotspotState(hotspot: CarHotspotState?, bandResId: Int) {
-        val text = getString(bandResId)
-        hotspotStateText.apply {
-            this.text = text
-            setTextColor(resources.getColor(R.color.text_primary))
+    private fun renderDeviceList(devices: List<ConnectedDevice>) {
+        val colorRes = if (devices.isEmpty()) R.color.text_secondary else R.color.ok
+        deviceNames.setTextColor(resources.getColor(colorRes))
+        deviceNames.text = if (devices.isEmpty()) {
+            getString(R.string.home_no_connected_device)
+        } else {
+            devices.joinToString(" / ") { it.name }
         }
+    }
+
+    /** 热点胶囊只保留图标 状态由图标颜色表达 */
+    private fun renderHotspotState(hotspot: CarHotspotState?) {
+        val label = hotspotStateLabel(hotspot)
         val tintResId = when (hotspot) {
             CarHotspotState.ENABLED -> R.color.ok
             CarHotspotState.DISABLED, CarHotspotState.DISABLING, CarHotspotState.FAILED -> R.color.warn
             else -> R.color.text_secondary
         }
         hotspotIcon.setIconTint(resources.getColor(tintResId))
-        hotspotIcon.contentDescription = "$text ${hotspotStateLabel(hotspot)}"
+        hotspotIcon.contentDescription = getString(R.string.home_hotspot_accessibility, label)
     }
 
     /** 蓝牙胶囊只保留图标 状态由图标颜色表达 */
@@ -353,69 +385,20 @@ class HomeActivity : Activity() {
         bluetoothIcon.contentDescription = "$source ${bluetoothStateLabel(geely, bluetooth)}"
     }
 
-    /** 频段优先按驱动实际频率判断 其次热点配置 最后按信道 */
-    private fun hotspotBandLabel(
-        configuration: CarHotspotConfiguration?,
-        frequencyMHz: Int?,
-    ): Int {
-        val channel = configuration?.channel
-        return when {
-            frequencyMHz != null && frequencyMHz in 2400..2500 -> R.string.home_hotspot_band_2g
-            frequencyMHz != null && frequencyMHz in 4900..5900 -> R.string.home_hotspot_band_5g
-            configuration?.band == ManualHotspotBand.GHZ_5 -> R.string.home_hotspot_band_5g
-            configuration?.band == ManualHotspotBand.GHZ_2_4 -> R.string.home_hotspot_band_2g
-            channel != null && channel >= 32 -> R.string.home_hotspot_band_5g
-            channel != null && channel in 1..14 -> R.string.home_hotspot_band_2g
-            else -> R.string.home_hotspot_band_unknown
-        }
-    }
-
-    private fun hotspotStateLabel(state: CarHotspotState?): String = when (state) {
-        CarHotspotState.ENABLED -> "已开启"
-        CarHotspotState.ENABLING -> "启动中"
-        CarHotspotState.DISABLING -> "正在关闭"
-        CarHotspotState.DISABLED -> "未开启"
-        CarHotspotState.FAILED -> "异常"
-        else -> "状态未知"
-    }
+    private fun hotspotStateLabel(state: CarHotspotState?): String = getString(when (state) {
+        CarHotspotState.ENABLED -> R.string.home_hotspot_state_enabled
+        CarHotspotState.ENABLING -> R.string.home_hotspot_state_enabling
+        CarHotspotState.DISABLING -> R.string.home_hotspot_state_disabling
+        CarHotspotState.DISABLED -> R.string.home_hotspot_state_disabled
+        CarHotspotState.FAILED -> R.string.home_hotspot_state_failed
+        else -> R.string.home_hotspot_state_unknown
+    })
 
     private fun bluetoothStateLabel(geely: Boolean, bluetooth: Boolean?): String = when {
         geely -> "原厂通道"
         bluetooth == true -> "已开启"
         bluetooth == false -> "未开启"
         else -> "状态未知"
-    }
-
-    /** 会话在线时标注当前连接 只有蓝牙在线时仍显示上次连接 */
-    private fun renderLastDevice(name: String, hasDevice: Boolean, online: Boolean, connected: Boolean) {
-        deviceLabelText.text =
-            getString(if (connected) R.string.home_current_device else R.string.home_last_device)
-        deviceText.apply {
-            text = when {
-                connected && !hasDevice -> "iPhone"
-                connected -> name
-                hasDevice && !online -> getString(R.string.home_device_offline, name)
-                else -> name
-            }
-            setTextColor(resources.getColor(when {
-                connected || online -> R.color.text_primary
-                !hasDevice -> R.color.text_tertiary
-                else -> R.color.text_secondary
-            }))
-        }
-        deviceDot.setBackgroundResource(
-            if (connected || (hasDevice && online)) R.drawable.dot_ok else R.drawable.dot_muted
-        )
-        android.util.Log.i(
-            "GeelyCarPlay",
-            "设备在线: connected=$connected hasDevice=$hasDevice online=$online bluetoothOnlineOnly=${online && !connected}",
-        )
-    }
-
-    /** 上次设备不在线时快速连接置灰 同时退出焦点序列 */
-    private fun renderQuickConnect(ready: Boolean) {
-        quickConnectButton.isEnabled = ready
-        quickConnectLabel.isEnabled = ready
     }
 
     private fun showClock() {
@@ -425,11 +408,14 @@ class HomeActivity : Activity() {
     }
 
     override fun onDestroy() {
+        pollHandler.removeCallbacks(pollTick)
         background.shutdownNow()
         super.onDestroy()
     }
 
     companion object {
         internal const val ACTION_EXIT = "com.geely.carplay.EXIT"
+        private const val STATE_AUTO_CONNECT_ATTEMPTED = "auto_connect_attempted"
+        private const val POLL_INTERVAL_MILLIS = 2_000L
     }
 }

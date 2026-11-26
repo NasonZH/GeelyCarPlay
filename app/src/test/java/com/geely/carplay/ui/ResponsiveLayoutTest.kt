@@ -5,6 +5,7 @@ import android.graphics.Rect
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ScrollView
+import android.widget.TextView
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -27,6 +28,9 @@ class ResponsiveLayoutTest {
         assertEquals(View.GONE, root.findViewById<View>(R.id.home_preview).visibility)
         root.findViewById<ScrollView>(R.id.home_content_scroll).fullScroll(View.FOCUS_DOWN)
         assertInside(root, root.findViewById(R.id.home_connect_button))
+        assertInside(root, root.findViewById(R.id.home_usb_button))
+        assertInside(root, root.findViewById(R.id.home_hotspot_icon))
+        assertEquals(1, root.findViewById<TextView>(R.id.home_device_list).maxLines)
         assertInside(root, root.findViewById(R.id.home_settings_button))
         assertInside(root, root.findViewById(R.id.home_exit))
         activity.destroy()
@@ -34,20 +38,15 @@ class ResponsiveLayoutTest {
 
     @Test
     @Config(qualifiers = "w640dp-h360dp-land-xxhdpi")
-    fun phoneConnectionStepsCanScrollToLastStep() {
+    fun phoneConnectLogPageKeepsActionsReachable() {
         useLargeText()
         val activity = Robolectric.buildActivity(ConnectActivity::class.java).create()
         val root = content(activity.get())
         layout(root, 1920, 1080)
-        val steps = root.findViewById<ViewGroup>(R.id.connect_steps)
-        root.findViewById<ScrollView>(R.id.connect_sidebar_scroll).fullScroll(View.FOCUS_DOWN)
-        assertInside(root, steps.getChildAt(steps.childCount - 1))
+        assertInside(root, root.findViewById(R.id.connect_log_scroll))
         assertInside(root, root.findViewById(R.id.connect_action))
-        val wireless = root.findViewById<View>(R.id.choose_wireless)
-        val usb = root.findViewById<View>(R.id.choose_usb)
-        assertTrue(wireless.width > 0 && usb.width > 0)
-        assertTrue(bounds(root, wireless).right <= bounds(root, usb).left)
-        assertTrue(bounds(root, usb).right <= root.width)
+        assertInside(root, root.findViewById(R.id.connect_back))
+        assertTrue(root.findViewById<View>(R.id.connect_log_scroll).width > root.width / 2)
         activity.destroy()
     }
 
@@ -76,6 +75,9 @@ class ResponsiveLayoutTest {
         assertInside(root, root.findViewById(R.id.home_preview))
         root.findViewById<ScrollView>(R.id.home_content_scroll).fullScroll(View.FOCUS_DOWN)
         assertInside(root, root.findViewById(R.id.home_connect_button))
+        assertInside(root, root.findViewById(R.id.home_usb_button))
+        assertInside(root, root.findViewById(R.id.home_hotspot_icon))
+        assertEquals(1, root.findViewById<TextView>(R.id.home_device_list).maxLines)
         activity.destroy()
     }
 

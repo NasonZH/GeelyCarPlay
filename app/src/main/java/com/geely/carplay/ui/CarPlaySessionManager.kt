@@ -699,6 +699,16 @@ object CarPlaySessionManager {
         return controller?.sendTouch(CarPlayTouchMapper.contacts(event, width, height)) ?: false
     }
 
+    /** 仅转发已连接会话的媒体按键 入队成功不代表手机已执行 */
+    fun sendMediaKey(keyCode: Int): Boolean {
+        val button = CarPlayMediaButton.forKeyCode(keyCode)
+        val queued = if (isConnected && !isExiting && button != null) {
+            controller?.sendMediaButton(button) == true
+        } else false
+        appendLog("按键诊断: keyCode=$keyCode action=down 媒体映射=$button 入队=$queued 已连接=$isConnected")
+        return queued
+    }
+
     /** 日志快照在调用线程生成 文件写入与结果回调分别在工作线程和主线程完成 */
     fun saveReport(context: Context, onSaved: (File?, Throwable?) -> Unit) {
         val snapshot = logLines.joinToString("\n")
@@ -749,6 +759,7 @@ object CarPlaySessionManager {
             message.contains("超时") || message.contains("断开") || message.contains("取消") ||
             message.contains("通话") ||
             message.startsWith("连接时间线") || message.startsWith("会话诊断") ||
+            message.startsWith("按键诊断") ||
             message.startsWith("链路诊断") || message.startsWith("画布 ") ||
             message.startsWith("音频能力")
 
