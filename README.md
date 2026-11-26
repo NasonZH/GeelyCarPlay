@@ -10,13 +10,13 @@
 | [排障手册](docs/troubleshooting.md) | 热点、蓝牙、音频、黑屏和退出故障 |
 | [移植记录](docs/carplay-migration.md) | 来源、源码差异、认证和验收边界 |
 
-截至 2026-11-25：当前为 v1.0.2（versionName 1.0.2，包名 `com.carplay`，应用名 CarPlay）。音乐电流声与主动断开后的残留播放已在实机确认消除；来电自动切换手机蓝牙通话；首页布局、连接前检查、不依赖蓝牙的断开检测与音乐缓冲档位已在小米 MI6 上验收；车机上完成了视频帧池化、5GHz 信道 149 + 802.11n + WMM 与设备在线判断的实机验证。
+截至 2026-11-26：当前为 v1.1.0（versionName 1.1.0，versionCode 4，包名 `com.carplay`，应用名 CarPlay），安装包统一命名为 `CarPlay.apk`。本轮连接流程与媒体按键变更见 [v1.1.0 更新说明](docs/release-notes-v1.1.0.md)，实车切歌效果仍待验收。音乐电流声与主动断开后的残留播放已在实机确认消除；来电自动切换手机蓝牙通话；此前首页布局、连接前检查、不依赖蓝牙的断开检测与音乐缓冲档位已在小米 MI6 上验收；车机上完成了视频帧池化、5GHz 信道 149 + 802.11n + WMM 与设备在线判断的实机验证。
 
 ## 功能特性
 
 - 无线连接：蓝牙 iAP2 配对 + 车机热点（Wi-Fi）承载 AirPlay，iPhone 无需数据线；蓝牙只参与建立连接，连接后关闭手机蓝牙不影响投屏。
 - 有线连接：USB + VPN/NCM 数据通道，首次使用需授权本地 VPN。
-- 画面与触摸：硬件 H.264 解码，1920×720 画布，等比显示与触摸回传；连接成功后自动进入 CarPlay，最多等待 3 秒。
+- 画面与触摸：硬件 H.264 解码，1920×720 画布，等比显示与触摸回传；连接成功后自动进入 CarPlay。
 - 音频：音乐 AAC-LC 48 kHz 双声道，导航 Opus；媒体通道不会因焦点被其他应用夺走而静音，导航走车机独立通道可单独调音量；音乐缓冲默认 500 毫秒，可在设置改为 1000 毫秒抵抗 Wi-Fi 抖动；iPhone 连接时自动续播的音乐会被车机暂停一次。
 - 会话：前台服务保留连接，连接中可取消，断开、自动连接、开机启动可选；手机无响应约 5 秒自动断开并回到首页，检测不依赖蓝牙；连接过程输出时间线日志，无线连接每 5 秒输出链路诊断；通话接通时自动把投屏页拉回前台（最多尝试 5 次），挂断后由车机恢复原有流程。
 - 首页：每 2 秒刷新热点和蓝牙状态，热点胶囊仅用图标颜色表示状态；当前蓝牙已连接的手机名称用 / 分隔并单行显示为绿色，标题保持原色，连接成功后隐藏整个蓝牙设备区，仅保留当前投屏设备提示，多台时连接前弹窗选择；首页直接提供“无线连接”和“USB 连接”，点击后进入连接日志页；会话在线时显示当前投屏设备。
@@ -63,7 +63,7 @@ applicationId 为 `com.carplay`，Kotlin 包名与 namespace 仍为 `com.geely.c
 ./gradlew :app:assembleDebug --offline --console=plain
 ```
 
-APK：`app/build/outputs/apk/debug/CarPlay-v<版本>.apk`（当前 v1.0.2）。仓库**不包含** Apple MFi 认证资产，构建前需自备 `app/src/main/assets/offline-mfi/identity.pk8` 与 `certificate.p7b`；缺少时仍可编译，但本地 MFi 认证不可用。GitHub Releases 提供预构建安装包。
+APK：`app/build/outputs/apk/debug/CarPlay.apk`（当前 v1.1.0）。仓库**不包含** Apple MFi 认证资产，构建前需自备 `app/src/main/assets/offline-mfi/identity.pk8` 与 `certificate.p7b`；缺少时仍可编译，但本地 MFi 认证不可用。GitHub Releases 提供预构建安装包。
 
 ## 使用指南
 

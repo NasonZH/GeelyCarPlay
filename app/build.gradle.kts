@@ -2,8 +2,8 @@ plugins {
     id("com.android.application")
 }
 
-// 基线版本号同时用于应用版本和 APK 输出文件名
-val appVersionName = "1.0.2"
+// 应用版本用于展示和发布记录
+val appVersionName = "1.1.0"
 
 android {
     namespace = "com.geely.carplay.ui"
@@ -14,7 +14,7 @@ android {
         minSdk = 18
         targetSdk = 18
         multiDexEnabled = true
-        versionCode = 3
+        versionCode = 4
         versionName = appVersionName
     }
 
@@ -47,7 +47,7 @@ dependencies {
 androidComponents {
     onVariants { variant ->
         variant.outputs.forEach { output ->
-            output.outputFileName.set("CarPlay-v$appVersionName.apk")
+            output.outputFileName.set("CarPlay.apk")
         }
     }
 }
