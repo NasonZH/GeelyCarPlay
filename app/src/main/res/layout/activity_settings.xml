@@ -21,16 +21,16 @@
             android:id="@+id/settings_back"
             android:layout_width="@dimen/back_button_width"
             android:layout_height="@dimen/back_button_height"
-            android:background="@drawable/btn_ghost"
+            android:background="@drawable/btn_settings_back"
             android:clickable="true"
             android:contentDescription="@string/btn_back"
             android:focusable="true">
 
             <com.geely.carplay.ui.widget.IconView
-                android:layout_width="26dp"
-                android:layout_height="26dp"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
                 android:layout_gravity="center"
-                app:icon="arrowLeft"
+                app:icon="arrowLeftLine"
                 app:iconTint="@color/text_primary" />
         </FrameLayout>
 
@@ -38,7 +38,7 @@
             style="@style/Text.Title"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginStart="@dimen/gap_md"
+            android:layout_marginStart="@dimen/gap_sm"
             android:text="@string/settings_title" />
     </LinearLayout>
 

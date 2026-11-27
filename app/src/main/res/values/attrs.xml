@@ -24,6 +24,7 @@
             <enum name="power" value="19" />
             <enum name="link" value="20" />
             <enum name="exit" value="21" />
+            <enum name="arrowLeftLine" value="22" />
         </attr>
         <attr name="iconTint" format="color" />
     </declare-styleable>

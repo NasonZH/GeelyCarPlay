@@ -215,6 +215,13 @@ class IconView(context: Context, attrs: AttributeSet? = null) : View(context, at
                 path.lineTo(10.6f, 19.4f)
                 path.close()
             }
+            Icon.ARROW_LEFT_LINE -> {
+                path.moveTo(11f, 5f)
+                path.lineTo(4f, 12f)
+                path.lineTo(11f, 19f)
+                path.moveTo(4f, 12f)
+                path.lineTo(20f, 12f)
+            }
             Icon.REFRESH -> {
                 shape.set(4.2f, 4.2f, 19.8f, 19.8f)
                 path.addArc(shape, -50f, 290f)
@@ -274,6 +281,7 @@ class IconView(context: Context, attrs: AttributeSet? = null) : View(context, at
         PHONE, USB, GEAR, WIFI, BLUETOOTH, CAST, DISPLAY, VOLUME,
         LOCATION, FILE, INFO, THEME, CHECK, ARROW_RIGHT, LOCK, SLIDERS,
         ARROW_LEFT, REFRESH, PLAY, POWER, LINK, EXIT,
+        ARROW_LEFT_LINE,
     }
 
     private companion object {
