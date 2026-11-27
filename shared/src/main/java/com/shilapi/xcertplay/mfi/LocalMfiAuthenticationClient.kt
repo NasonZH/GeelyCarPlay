@@ -22,6 +22,10 @@ class LocalMfiAuthenticationClient private constructor(
 ) : MfiAuthenticator {
     override fun protocolMajor(): Int = 3
 
+    /** 复用已验证的认证材料 签名回调归当前控制器 */
+    internal fun withSignatureListener(listener: (Int) -> Unit): LocalMfiAuthenticationClient =
+        LocalMfiAuthenticationClient(privateKey, certificate, listener)
+
     override fun readCertificate(maximumOutputLength: Int): ByteArray {
         require(maximumOutputLength > 0 && certificate.size <= maximumOutputLength) {
             "Local certificate exceeds the requested output limit"

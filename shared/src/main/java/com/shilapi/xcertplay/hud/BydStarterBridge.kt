@@ -110,7 +110,11 @@ object BydStarterBridge {
     }
 
     private fun close() {
-        try { socket?.close() } catch (_: Exception) { }
+        try {
+            socket?.close()
+        } catch (error: Exception) {
+            Log.w(TAG, "关闭比亚迪辅助连接失败 error=${error.javaClass.simpleName}")
+        }
         socket = null; input = null; output = null
     }
 

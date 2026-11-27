@@ -13,6 +13,7 @@ class CarPlayApplication : MultiDexApplication() {
     override fun onCreate() {
         super.onCreate()
         ThemeStore.load(this)
+        AirPlayPersistence.purgeLegacyMfiSettings(this)
         // 详细日志开关随进程启动同步一次 设置页切换时再即时写入
         DiagnosticLog.verbose = AirPlayPersistence.loadDebugLogsEnabled(this)
     }

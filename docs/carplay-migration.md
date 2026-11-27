@@ -49,6 +49,8 @@ AirPlayInfoPlist与主来源一致，没有精简格式、telephony、speechReco
 
 ## 认证
 
+首页首次创建后会在后台准备并校验本地 MFi 认证材料。连接和预加载使用同一个工作线程，校验成功的结果在当前应用进程内复用。预加载失败时，连接会重试并沿用原有错误提示。预加载只验证本地材料，iPhone 是否接受认证仍以本次连接的 `AuthenticationSucceeded` 为准。
+
 普通构建默认包含：
 
 ```text
@@ -58,7 +60,7 @@ app/src/main/assets/offline-mfi/certificate.p7b
 
 来源为`/home/user/code/carup/work/apk/assets/offline-mfi/`，已核对与CarUp-4.0-release.apk一致，证书与私钥公钥匹配。未在文档写入密钥内容，未改认证签名算法。
 
-不需要DIPLAY_AUTH_ASSETS_DIR或外部Sync。其他认证方式需用户配置硬件、路径或服务器。MfiReady只表示提供器就绪，本轮实机收到AuthenticationSucceeded才是iPhone接受认证的证据；不能推及所有未来设备。
+不需要 DIPLAY_AUTH_ASSETS_DIR 或外部 Sync。当前仅支持本地 MFi，旧版本保存的认证目标、I²C 路径、远程地址和令牌在应用启动时清理。曾使用其他后端的设备升级后需要具备本地认证资产。MfiReady 只表示提供器就绪，收到 AuthenticationSucceeded 才表示 iPhone 接受了本次认证。此次后端删减待实机验收。
 
 ## 适配和验证边界
 

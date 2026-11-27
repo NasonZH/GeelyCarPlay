@@ -119,6 +119,7 @@ class HomeActivity : Activity() {
         findViewById<View>(R.id.home_settings_button).setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
+        CarPlaySessionManager.preloadLocalMfi(applicationContext)
     }
 
     override fun onResume() {

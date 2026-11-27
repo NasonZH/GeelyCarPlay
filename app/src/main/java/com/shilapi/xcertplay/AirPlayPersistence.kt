@@ -11,7 +11,6 @@ import com.shilapi.xcertplay.airplay.AirPlayIdentity
 import com.shilapi.xcertplay.airplay.PairingStore
 import com.shilapi.xcertplay.orchestration.ManualHotspotBand
 import com.shilapi.xcertplay.orchestration.ManualHotspotSecurity
-import com.shilapi.xcertplay.orchestration.MfiTarget
 import com.shilapi.xcertplay.orchestration.WirelessHotspotMode
 import com.shilapi.xcertplay.transport.LockdownPairRecord
 import java.io.File
@@ -72,10 +71,6 @@ object AirPlayPersistence {
     private const val KEY_HIDE_TOP_BAR = "hide_top_bar"
     private const val KEY_AUTO_START_ON_BOOT = "auto_start_on_boot"
     private const val KEY_LOCATION_REPORTING_ENABLED = "location_reporting_enabled"
-    private const val KEY_MFI_TARGET = "mfi_target"
-    private const val KEY_MFI_I2C_PATH = "mfi_i2c_path"
-    private const val KEY_REMOTE_MFI_SERVER = "remote_mfi_server"
-    private const val KEY_REMOTE_MFI_TOKEN = "remote_mfi_token"
     private const val SAFE_AREA_KEY_PREFIX = "safe_area_"
     private const val CUSTOM_ICON_FILE = "airplay-icon.png"
 
@@ -84,7 +79,6 @@ object AirPlayPersistence {
     const val DEFAULT_OEM_LABEL = "BYD"
     /** Old hard-coded brand label; treated as unset so existing installs migrate to the neutral name. */
     private const val LEGACY_OEM_LABEL = "BYD"
-    const val DEFAULT_MFI_I2C_PATH = "/dev/i2c-1"
 
     fun loadDisplayScaleTenths(context: Context): Int {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -266,50 +260,17 @@ object AirPlayPersistence {
             .apply()
     }
 
-    fun loadMfiTarget(context: Context): MfiTarget {
-        val stored = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_MFI_TARGET, null)
-        return MfiTarget.entries.firstOrNull { it.name == stored } ?: MfiTarget.LOCAL
-    }
+    /** 清理已移除的认证设置 不读取任何旧值 */
+    internal fun purgeLegacyMfiSettings(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val keys = listOf("mfi_target", "mfi_i2c_path", "remote_mfi_server", "remote_mfi_token")
+        if (keys.none(prefs::contains)) return
 
-    fun saveMfiTarget(context: Context, target: MfiTarget) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString(KEY_MFI_TARGET, target.name)
-            .apply()
-    }
-
-    fun loadMfiI2cPath(context: Context): String =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_MFI_I2C_PATH, null)
-            ?.takeIf { it.isNotBlank() }
-            ?: DEFAULT_MFI_I2C_PATH
-
-    fun saveMfiI2cPath(context: Context, path: String) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString(KEY_MFI_I2C_PATH, path.trim())
-            .apply()
-    }
-
-    fun loadRemoteMfiServer(context: Context): String =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_REMOTE_MFI_SERVER, null)
-            .orEmpty()
-
-    fun saveRemoteMfiServer(context: Context, server: String) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString(KEY_REMOTE_MFI_SERVER, server)
-            .apply()
-    }
-
-    fun loadRemoteMfiToken(context: Context): String =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_REMOTE_MFI_TOKEN, null)
-            .orEmpty()
-
-    fun saveRemoteMfiToken(context: Context, token: String) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString(KEY_REMOTE_MFI_TOKEN, token)
-            .apply()
+        val editor = prefs.edit()
+        for (key in keys) {
+            editor.remove(key)
+        }
+        editor.apply()
     }
 
     fun loadWirelessHotspotMode(context: Context): WirelessHotspotMode {

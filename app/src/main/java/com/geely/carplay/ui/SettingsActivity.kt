@@ -22,7 +22,6 @@ import com.shilapi.xcertplay.network.CarHotspotConfiguration
 import com.shilapi.xcertplay.network.CarHotspotFailure
 import com.shilapi.xcertplay.network.CarHotspotReadResult
 import com.shilapi.xcertplay.network.CarHotspotTools
-import com.shilapi.xcertplay.orchestration.MfiTarget
 import com.geely.carplay.ui.widget.IconView
 import com.geely.carplay.ui.widget.SettingRowView
 import com.geely.carplay.ui.widget.SyncScrollView
@@ -56,7 +55,6 @@ class SettingsActivity : Activity() {
                 SettingsItem.Toggle(R.string.settings_boot_start, R.string.settings_boot_start_desc),
                 SettingsItem.Link(R.string.settings_hotspot, R.string.settings_hotspot_desc, LinkAction.HOTSPOT),
                 SettingsItem.Toggle(R.string.settings_geely_bluetooth, R.string.settings_geely_bluetooth_desc),
-                SettingsItem.Link(R.string.settings_authentication, R.string.settings_authentication_desc, LinkAction.AUTHENTICATION),
             ),
         ),
         SettingsGroup(
@@ -362,7 +360,6 @@ class SettingsActivity : Activity() {
             LinkAction.HOTSPOT -> openHotspotSettings()
             LinkAction.PERMISSIONS -> openSystem(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
             LinkAction.BLUETOOTH -> openSystem(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
-            LinkAction.AUTHENTICATION -> chooseAuthentication()
             LinkAction.REPORT -> CarPlaySessionManager.saveReport(this) { file, error ->
                 if (file != null) {
                     showMessage("诊断报告", "报告已保存到 ${file.absolutePath}")
@@ -391,40 +388,6 @@ class SettingsActivity : Activity() {
 
     private fun showMessage(title: String, message: String) {
         AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("确定", null).show()
-    }
-
-    private fun chooseAuthentication() {
-        val targets = MfiTarget.entries.toTypedArray()
-        val labels = arrayOf("本地认证资产", "CH341 USB 认证设备", "I2C 认证设备", "远程认证服务")
-        AlertDialog.Builder(this).setTitle("MFi 认证方式")
-            .setSingleChoiceItems(labels, targets.indexOf(AirPlayPersistence.loadMfiTarget(this))) { dialog, index ->
-                AirPlayPersistence.saveMfiTarget(this, targets[index])
-                dialog.dismiss()
-                when (targets[index]) {
-                    MfiTarget.I2C -> editAuthenticationValue("I2C 设备路径", AirPlayPersistence.loadMfiI2cPath(this)) {
-                        AirPlayPersistence.saveMfiI2cPath(this, it)
-                    }
-                    MfiTarget.REMOTE -> editAuthenticationValue("远程认证地址", AirPlayPersistence.loadRemoteMfiServer(this)) { server ->
-                        AirPlayPersistence.saveRemoteMfiServer(this, server)
-                        editAuthenticationValue("远程认证令牌", AirPlayPersistence.loadRemoteMfiToken(this)) {
-                            AirPlayPersistence.saveRemoteMfiToken(this, it)
-                        }
-                    }
-                    MfiTarget.LOCAL -> showMessage("本地认证", "当前应用已内置本地 MFi 认证资产, 重新连接后生效")
-                    MfiTarget.USB_CH341 -> showReconnectHint()
-                }
-            }.setNegativeButton("取消", null).show()
-    }
-
-    private fun editAuthenticationValue(title: String, value: String, save: (String) -> Unit) {
-        val input = EditText(this).apply {
-            setText(value)
-            isSingleLine = true
-            if (title.contains("令牌")) inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
-        }
-        AlertDialog.Builder(this).setTitle(title).setView(input)
-            .setPositiveButton("保存") { _, _ -> save(input.text.toString().trim()); showReconnectHint() }
-            .setNegativeButton("取消", null).show()
     }
 
     /** 点击热点信息时先读系统配置 读到直接保存 读不到再让用户手动填写 */
@@ -507,7 +470,7 @@ class SettingsActivity : Activity() {
         return resources.getColor(colorResId)
     }
 
-    private enum class LinkAction { HOTSPOT, PERMISSIONS, BLUETOOTH, AUTHENTICATION, REPORT, VERSION, DEVICE, LICENSES }
+    private enum class LinkAction { HOTSPOT, PERMISSIONS, BLUETOOTH, REPORT, VERSION, DEVICE, LICENSES }
 
     private sealed class SettingsItem {
         object Theme : SettingsItem()

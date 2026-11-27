@@ -4,16 +4,15 @@ import android.content.Context
 import android.os.Build
 import com.shilapi.xcertplay.airplay.AirPlayIdentity
 import com.shilapi.xcertplay.mfi.LocalMfiAuthenticationClient
-import com.shilapi.xcertplay.orchestration.MfiTarget
 import java.io.File
 import java.security.MessageDigest
 
 /** Installs the private beta's experimental identity. It has no remote fallback. */
 internal object DiPlayBootstrap {
-    @Volatile private var ready = false
+    private var localMfi: LocalMfiAuthenticationClient? = null
 
-    @Synchronized fun ensure(context: Context) {
-        if (ready) return
+    @Synchronized fun loadLocalMfi(context: Context): LocalMfiAuthenticationClient {
+        localMfi?.let { return it }
         val privateData = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             context.noBackupFilesDir
         } else {
@@ -22,7 +21,7 @@ internal object DiPlayBootstrap {
             context.filesDir
         }
         val target = File(privateData, LocalMfiAuthenticationClient.DIRECTORY)
-        if (!target.exists()) {
+        val client = if (!target.exists()) {
             val staging = File(privateData, "offline-mfi-staging")
             staging.deleteRecursively()
             check(staging.mkdirs()) { "Could not prepare local authentication" }
@@ -41,15 +40,17 @@ internal object DiPlayBootstrap {
                     file.setReadable(false, false); file.setReadable(true, true)
                     file.setWritable(false, false); file.setWritable(true, true)
                 }
-                LocalMfiAuthenticationClient.load(staging)
+                val prepared = LocalMfiAuthenticationClient.load(staging)
                 check(staging.renameTo(target)) { "Could not install local authentication" }
+                prepared
             } finally {
                 staging.deleteRecursively()
             }
+        } else {
+            LocalMfiAuthenticationClient.load(target)
         }
-        LocalMfiAuthenticationClient.load(target)
-        AirPlayPersistence.saveMfiTarget(context, MfiTarget.LOCAL)
-        ready = true
+        localMfi = client
+        return client
     }
 
     fun deviceId(identity: AirPlayIdentity): String {

@@ -37,14 +37,12 @@ class LocalOnlyHotspotManager(context: Context, private val onDiagnostic: (Strin
             ?: error("Connectivity service unavailable")
     private val wifiManager = context.applicationContext.systemService(WifiManager::class.java, "wifi")
         ?: error("Wi-Fi service unavailable")
-        ?: throw IllegalStateException("WifiManager is unavailable")
     private val stateLock = Object()
 
     private var startAttempt: StartAttempt? = null
     private var reservation: WifiManager.LocalOnlyHotspotReservation? = null
     private var multicastLock: WifiManager.MulticastLock? = null
     private var radioObserver: LocalOnlyHotspotRadioInfo? = null
-    private var stopped = false
     private var closed = false
 
     /**
@@ -106,7 +104,6 @@ class LocalOnlyHotspotManager(context: Context, private val onDiagnostic: (Strin
                 radioObserver = radioInfo
                 observerAdopted = true
                 startAttempt = null
-                stopped = false
                 acquiredMulticastLock = null
             }
             radioInfo.watch(apInterface.bssid ?: configuration.bssid, onDiagnostic)
@@ -369,7 +366,6 @@ class LocalOnlyHotspotManager(context: Context, private val onDiagnostic: (Strin
                 synchronized(stateLock) {
                     if (startAttempt === attempt) attempt.stopped = true
                     if (reservation === attempt.reservation) {
-                        stopped = true
                         lockToRelease = multicastLock
                         multicastLock = null
                     }

@@ -23,10 +23,7 @@ import com.shilapi.xcertplay.media.AndroidMediaSink
 import com.shilapi.xcertplay.media.CarPlayTouchMapper
 import com.shilapi.xcertplay.orchestration.*
 import com.shilapi.xcertplay.transport.Iap2IdentificationConfig
-import com.shilapi.xcertplay.transport.UsbDeviceId
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
@@ -52,18 +49,11 @@ object CarPlaySessionManager {
     private const val MAX_CALL_BRING_ATTEMPTS = 5
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
+    private var mfiPreloadScheduled = false
     private val commands = Executors.newSingleThreadExecutor()
     private val notifyListeners = Runnable { listeners.toList().forEach { it() } }
     private val listeners = mutableSetOf<() -> Unit>()
-    private val logLines = ArrayDeque<String>()
-    /** 复用同一个格式化器 每条日志都新建 SimpleDateFormat 在车机上开销明显 */
-    private val logTimeLock = Any()
-    private val logTimeFormat = SimpleDateFormat("HH:mm:ss", Locale.CHINA)
-    /** 每秒允许写入的常规日志条数 超出部分按秒合并 避免连接阶段刷屏 */
-    private const val LOG_BURST_LIMIT_PER_SECOND = 12
-    private var logBurstWindowStartMs = 0L
-    private var logBurstCount = 0
-    private var logBurstSuppressed = 0
+    private val logBuffer = CarPlayLogBuffer()
     private val sessions = java.util.concurrent.CopyOnWriteArraySet<AirPlaySession>()
     @Volatile private var generation = 0
     private var controller: CarPlayController? = null
@@ -116,7 +106,7 @@ object CarPlaySessionManager {
     var videoHeight = 720
         private set
 
-    fun logs(): List<String> = logLines.toList()
+    fun logs(): List<String> = logBuffer.snapshot()
 
     fun observe(listener: () -> Unit) {
         listeners += listener
@@ -165,6 +155,20 @@ object CarPlaySessionManager {
         }
     }
 
+    /** 首页在主线程排队 连接使用同一个工作线程 */
+    internal fun preloadLocalMfi(context: Context) {
+        if (mfiPreloadScheduled) return
+        mfiPreloadScheduled = true
+        val app = context.applicationContext
+        worker.execute {
+            try {
+                DiPlayBootstrap.loadLocalMfi(app)
+            } catch (error: Exception) {
+                android.util.Log.w("GeelyCarPlay", "本地 MFi 预加载失败 error=${error.javaClass.simpleName}")
+            }
+        }
+    }
+
     internal fun start(context: Context) {
         if (isRunning || isExiting) return
         val app = context.applicationContext
@@ -172,7 +176,7 @@ object CarPlaySessionManager {
         isRunning = true
         isConnected = false
         sessions.clear()
-        logLines.clear()
+        logBuffer.clear()
         connectStartedAt = SystemClock.elapsedRealtime()
         sessionActiveAt = 0L
         screenEntryAt = 0L
@@ -188,7 +192,7 @@ object CarPlaySessionManager {
             var renderer: AndroidMediaSink? = null
             var next: CarPlayController? = null
             try {
-                if (AirPlayPersistence.loadMfiTarget(app) == MfiTarget.LOCAL) DiPlayBootstrap.ensure(app)
+                val localMfi = DiPlayBootstrap.loadLocalMfi(app)
                 val identity = AirPlayPersistence.loadIdentity(app)
                 val wireless = AirPlayPersistence.loadWirelessEnabled(app)
                 val hotspotMode = AirPlayPersistence.loadWirelessHotspotMode(app)
@@ -198,13 +202,7 @@ object CarPlaySessionManager {
                 if (generation != token) return@execute
                 val deviceId = DiPlayBootstrap.deviceId(identity)
                 val locationEnabled = AirPlayPersistence.loadLocationReportingEnabled(app)
-                val mfiTarget = AirPlayPersistence.loadMfiTarget(app)
                 val runtime = CarPlayRuntimeConfig(
-                    mfiTarget = mfiTarget,
-                    ch341Devices = listOf(UsbDeviceId(0x1a86, 0x5512)),
-                    linuxI2cPath = AirPlayPersistence.loadMfiI2cPath(app),
-                    remoteMfiServer = AirPlayPersistence.loadRemoteMfiServer(app).takeIf { it.length > 0 },
-                    remoteMfiToken = AirPlayPersistence.loadRemoteMfiToken(app).takeIf { it.length > 0 },
                     identification = Iap2IdentificationConfig(
                         name = "车机",
                         modelIdentifier = "GKUI",
@@ -343,6 +341,7 @@ object CarPlaySessionManager {
                     config = runtime,
                     airPlayConfig = config,
                     identity = identity,
+                    localMfi = localMfi,
                     pairings = AirPlayPersistence.loadPairings(app) { id, key -> AirPlayPersistence.savePairing(app, id, key) },
                     listener = listener,
                     media = CarPlayMediaEngine(renderer, microphone),
@@ -717,13 +716,13 @@ object CarPlaySessionManager {
 
     /** 日志快照在调用线程生成 文件写入与结果回调分别在工作线程和主线程完成 */
     fun saveReport(context: Context, onSaved: (File?, Throwable?) -> Unit) {
-        val snapshot = logLines.joinToString("\n")
+        val snapshot = logBuffer.snapshot()
         val appContext = context.applicationContext
         worker.execute {
             val result = runCatching {
                 val directory = appContext.getExternalFilesDir(null) ?: appContext.filesDir
                 val file = File(directory, "carplay-diagnostic.txt")
-                file.writeText(snapshot)
+                file.writeText(snapshot.joinToString("\n"))
                 file
             }
             main.post { onSaved(result.getOrNull(), result.exceptionOrNull()) }
@@ -735,47 +734,7 @@ object CarPlaySessionManager {
     }
 
     private fun appendLog(message: String) {
-        if (!allowLogLine(message)) return
-        writeLogLine(message)
-    }
-
-    /** 高频阶段限制写入速率 失败/错误类关键行与详细日志模式始终保留 */
-    private fun allowLogLine(message: String): Boolean {
-        if (com.shilapi.xcertplay.diagnostics.DiagnosticLog.verbose) return true
-        if (isCriticalLog(message)) return true
-        val now = SystemClock.elapsedRealtime()
-        if (now - logBurstWindowStartMs >= 1_000L) {
-            logBurstWindowStartMs = now
-            logBurstCount = 0
-            if (logBurstSuppressed > 0) {
-                writeLogLine("日志采样: 上一秒省略 ${logBurstSuppressed} 条高频日志")
-                logBurstSuppressed = 0
-            }
-        }
-        if (logBurstCount < LOG_BURST_LIMIT_PER_SECOND) {
-            logBurstCount++
-            return true
-        }
-        logBurstSuppressed++
-        return false
-    }
-
-    private fun isCriticalLog(message: String): Boolean =
-        message.contains("失败") || message.contains("错误") || message.contains("异常") ||
-            message.contains("超时") || message.contains("断开") || message.contains("取消") ||
-            message.contains("通话") ||
-            message.startsWith("连接时间线") || message.startsWith("会话诊断") ||
-            message.startsWith("按键诊断") ||
-            message.startsWith("链路诊断") || message.startsWith("画布 ") ||
-            message.startsWith("音频能力")
-
-    private fun writeLogLine(message: String) {
-        val safeMessage = com.shilapi.xcertplay.DiagnosticRedactor.redact(message) ?: return
-        android.util.Log.i("GeelyCarPlay", safeMessage)
-        val time = synchronized(logTimeLock) { logTimeFormat.format(Date()) }
-        logLines.addLast("$time  $safeMessage")
-        while (logLines.size > 150) logLines.removeFirst()
-        changed()
+        if (logBuffer.append(message)) changed()
     }
 
     /** 距离连接开始的毫秒数 未记录时显示占位符 */
@@ -825,9 +784,7 @@ object CarPlaySessionManager {
     }
 
     private fun statusLabel(status: CarPlayStatus): String = when (status) {
-        CarPlayStatus.DiscoveringMfi -> "正在查找 MFi 认证设备"
-        CarPlayStatus.WaitingForMfi -> "等待 MFi 认证设备"
-        CarPlayStatus.RequestingMfiPermission -> "请授权访问 MFi 设备"
+        CarPlayStatus.DiscoveringMfi -> "正在加载本地 MFi 认证"
         CarPlayStatus.MfiReady -> "MFi 认证已就绪"
         CarPlayStatus.StartingHotspot -> "正在启动热点"
         is CarPlayStatus.HotspotReady -> "热点已就绪"
