@@ -51,6 +51,7 @@ internal class AudioFocusCoordinator(
 ) {
     // AudioAttributes/AudioFocusRequest are absent on Android 4.3; keep them as Any and reflect.
     private data class Entry(val channel: AudioChannel, val attributes: Any)
+    private data class TrackVolume(val channel: AudioChannel, val streamType: Int, var focusVolume: Float)
     private data class GeelyFocusKey(val channel: AudioChannel, val streamType: Int)
     private class GeelyFocusLease(
         val key: GeelyFocusKey,
@@ -69,6 +70,9 @@ internal class AudioFocusCoordinator(
     private val geelyTracks = LinkedHashMap<AudioTrack, GeelyFocusKey>()
     private val geelyListeners = LinkedHashMap<GeelyFocusKey, GeelyFocusLease>()
     private val geelyVolumes = LinkedHashMap<GeelyFocusKey, Float>()
+    private val trackVolumes = LinkedHashMap<AudioTrack, TrackVolume>()
+    private val playingNavigationTracks = HashSet<AudioTrack>()
+    private var focusVolume = FULL_VOLUME
     private val listener = AudioManager.OnAudioFocusChangeListener { change ->
         synchronized(this) {
             runCatching { report("Audio: focus change=$change activeTracks=${active.size}") }
@@ -79,6 +83,44 @@ internal class AudioFocusCoordinator(
                 // do not send a later gain callback after taking focus back.
             }
         }
+    }
+
+    @Synchronized
+    fun register(track: AudioTrack, channel: AudioChannel, streamType: Int = AudioManager.STREAM_MUSIC) {
+        val volume = if (separateGeelyFocus || channel == AudioChannel.NAVIGATION) FULL_VOLUME else focusVolume
+        trackVolumes[track] = TrackVolume(channel, streamType, volume)
+        applyTrackVolume(track)
+    }
+
+    @Synchronized
+    fun navigationStarted(track: AudioTrack) {
+        val state = trackVolumes[track] ?: return
+        if (state.channel != AudioChannel.NAVIGATION || !playingNavigationTracks.add(track)) return
+        updateNavigationVolume()
+        if (separateGeelyFocus) acquireGeely(track, state.channel, state.streamType)
+    }
+
+    @Synchronized
+    fun navigationFinished(track: AudioTrack) {
+        if (!playingNavigationTracks.remove(track)) return
+        releaseGeelyFocus(track)
+        updateNavigationVolume()
+    }
+
+    private fun updateNavigationVolume() {
+        trackVolumes.filterValues { it.channel == AudioChannel.MEDIA }.keys.forEach(::applyTrackVolume)
+        runCatching { report("导航音乐压低: 播放流数=${playingNavigationTracks.size}") }
+    }
+
+    private fun applyTrackVolume(track: AudioTrack) {
+        val state = trackVolumes[track] ?: return
+        val navigationVolume = if (state.channel == AudioChannel.MEDIA && playingNavigationTracks.isNotEmpty()) {
+            DUCKED_VOLUME
+        } else {
+            FULL_VOLUME
+        }
+        // 焦点和导航使用同一个音量出口 避免重复压低或覆盖通话静音
+        PortableAudio.setVolume(track, minOf(state.focusVolume, navigationVolume))
     }
 
     @Synchronized
@@ -108,6 +150,14 @@ internal class AudioFocusCoordinator(
 
     @Synchronized
     fun release(track: AudioTrack) {
+        navigationFinished(track)
+        trackVolumes.remove(track)
+        releaseGeelyFocus(track)
+        if (legacyOnlyTracks.remove(track) != null) refreshLegacyFocus()
+        if (active.remove(track) != null) refreshRequest()
+    }
+
+    private fun releaseGeelyFocus(track: AudioTrack) {
         val geelyKey = geelyTracks.remove(track)
         if (geelyKey != null && geelyTracks.values.none { it == geelyKey }) {
             geelyVolumes.remove(geelyKey)
@@ -118,8 +168,6 @@ internal class AudioFocusCoordinator(
                 }
             }
         }
-        if (legacyOnlyTracks.remove(track) != null) refreshLegacyFocus()
-        if (active.remove(track) != null) refreshRequest()
     }
 
     @Suppress("DEPRECATION")
@@ -207,7 +255,8 @@ internal class AudioFocusCoordinator(
     private fun setGeelyChannelVolume(key: GeelyFocusKey, volume: Float) {
         geelyVolumes[key] = volume
         geelyTracks.filterValues { it == key }.keys.forEach { track ->
-            runCatching { PortableAudio.setVolume(track, volume) }
+            trackVolumes[track]?.focusVolume = volume
+            applyTrackVolume(track)
         }
     }
 
@@ -295,7 +344,11 @@ internal class AudioFocusCoordinator(
     }
 
     private fun setVolume(volume: Float) {
-        active.keys.forEach { track -> PortableAudio.setVolume(track, volume) }
+        focusVolume = volume
+        trackVolumes.filterValues { it.channel != AudioChannel.NAVIGATION }.forEach { (track, state) ->
+            state.focusVolume = volume
+            applyTrackVolume(track)
+        }
     }
 
     private fun AudioChannel.focusPriority(): Int = when (this) {
@@ -1423,6 +1476,7 @@ private class AudioRenderer(
             )
         }
         track = built
+        audioFocusCoordinator.register(built, selection.channel, legacyTrackStreamType)
         val capacityBytes = (PortableAudio.bufferSizeInFrames(built).takeIf { it > 0 }?.times(frameBytes)
             ?: PortableAudio.bufferSizeBytes(built)).coerceAtLeast(minBuffer)
         startThresholdBytes = MediaAudioBuffer.startBytesFor(plan.startBytes, capacityBytes, prebufferChunkBytes)
@@ -1492,14 +1546,11 @@ private class AudioRenderer(
         bufferBytes = bufferBytes,
     )
 
-    /**
-     * Shares a sink-level focus request across all active non-navigation renderers.
-     * Navigation guidance intentionally takes no focus: it overlays media without ducking it.
-     */
+    /** 导航焦点由实际播放状态管理 其他音频沿用原有焦点申请 */
     private fun requestAudioFocus() {
         val channel = mappedChannel ?: return
-        if (channel == AudioChannel.NAVIGATION && geelyAudio == null) {
-            Log.i(TAG, "audio focus skipped channel=NAVIGATION; overlays without ducking")
+        if (channel == AudioChannel.NAVIGATION) {
+            Log.i(TAG, "导航焦点与音乐压低按播放状态控制")
             return
         }
         val currentTrack = track ?: return
@@ -1509,10 +1560,6 @@ private class AudioRenderer(
         } else {
             audioFocusCoordinator.acquire(currentTrack, channel, attributes, legacyTrackStreamType)
         }
-    }
-
-    private fun abandonAudioFocus() {
-        track?.let(audioFocusCoordinator::release)
     }
 
     private fun streamType(): Int {
@@ -1809,6 +1856,7 @@ private class AudioRenderer(
             applyFadeIn(data, offset, length)
             fadeApplied = true
         }
+        if (length > 0 && playbackStarted) audioFocusCoordinator.navigationStarted(track)
         var written = 0
         while (written < length && running) {
             val writeLength = if (playbackStarted) {
@@ -1846,6 +1894,7 @@ private class AudioRenderer(
     }
 
     private fun startPlayback(track: AudioTrack) {
+        audioFocusCoordinator.navigationStarted(track)
         underrunsAtPlaybackStart = PortableAudio.underrunCount(track)
         track.play()
         playbackStarted = true
@@ -1866,6 +1915,12 @@ private class AudioRenderer(
         if (!playbackStarted && prebufferBytes > 0 && queue.isEmpty() &&
             System.nanoTime() - lastPcmWriteNs >= BUFFER_TAIL_WAIT_NS) {
             startPlayback(track)
+        }
+        if (mappedChannel == AudioChannel.NAVIGATION && playbackStarted && queue.isEmpty() &&
+            System.nanoTime() - maxOf(lastPcmWriteNs, lastArrivalNs.get()) >= NAVIGATION_RELEASE_DELAY_NS &&
+            bufferProgress.queuedBytes(track.playbackHeadPosition) == 0L
+        ) {
+            audioFocusCoordinator.navigationFinished(track)
         }
     }
 
@@ -1940,7 +1995,6 @@ private class AudioRenderer(
 
     @Synchronized
     private fun release() {
-        abandonAudioFocus()
         val decoder = opusDecoder
         opusDecoder = null
         decoder?.close()
@@ -1966,6 +2020,7 @@ private class AudioRenderer(
             } catch (_: Exception) {
                 // Best effort.
             }
+            audioFocusCoordinator.release(track)
             try {
                 track.flush()
             } catch (_: Exception) {
@@ -1993,6 +2048,7 @@ private class AudioRenderer(
         const val AAC_FRAME_SAMPLES = 1_024L
         const val MAX_GAP_SAMPLES = 96_000L
         const val BUFFER_TAIL_WAIT_NS = 500_000_000L
+        const val NAVIGATION_RELEASE_DELAY_NS = 250_000_000L
         // Holds a burst after a Wi-Fi gap (~4 s of AAC) instead of dropping it.
         const val MAX_QUEUED_PACKETS = 192
         // Real-time cap (12 x 20 ms = 240 ms): older packets are dropped instead of stretching audio.

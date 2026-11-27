@@ -148,31 +148,6 @@ object AirPlayPersistence {
             .getBoolean(KEY_AUDIO_FOCUS_ENABLED, false)
 
     /**
-     * CarPlay microphone. Off by default on this platform: the GKUI voice service holds the cabin
-     * microphone, so instead of sending a microphone the head unit lets the iPhone capture the call
-     * with its own mic, which keeps two-way calls working.
-     */
-    fun loadCarMicrophoneEnabled(context: Context): Boolean =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getBoolean("car_microphone_enabled", false)
-
-    fun saveCarMicrophoneEnabled(context: Context, enabled: Boolean) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putBoolean("car_microphone_enabled", enabled).apply()
-    }
-
-    /**
-     * Call handling on CarPlay: 0 = leave it to CarPlay (default), 1 = preempt the cabin microphone
-     * (root), 2 = decline the CarPlay call stream so the factory Bluetooth handles the call.
-     */
-    fun loadCallMode(context: Context): Int =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt("call_mode", 0)
-
-    fun saveCallMode(context: Context, mode: Int) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putInt("call_mode", mode).apply()
-    }
-    /**
      * Bluetooth-audio mode: CarPlay stays video-only so the iPhone routes media and calls to the
      * factory Bluetooth link. Needs a reconnect to take effect.
      */

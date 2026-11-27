@@ -52,8 +52,4 @@
         <item>19</item>
         <item>20</item>
     </string-array>
-    <string-array name="settings_call_mode_values">
-        <item>CarPlay 默认</item>
-        <item>CarPlay 通话 + 车机麦克风 · 需 Root</item>
-    </string-array>
 </resources>

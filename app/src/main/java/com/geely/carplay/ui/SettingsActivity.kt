@@ -97,7 +97,6 @@ class SettingsActivity : Activity() {
             IconView.Icon.VOLUME,
             listOf(
                 SettingsItem.Toggle(R.string.settings_geely_audio, R.string.settings_geely_audio_desc),
-                SettingsItem.Choice(R.string.settings_call_mode, R.string.settings_call_mode_desc, R.array.settings_call_mode_values),
                 SettingsItem.Toggle(R.string.settings_audio_focus, R.string.settings_audio_focus_desc),
                 SettingsItem.Toggle(R.string.settings_advanced_audio, R.string.settings_advanced_audio_desc),
                 SettingsItem.Choice(
@@ -330,7 +329,6 @@ class SettingsActivity : Activity() {
         R.string.settings_video_output -> if (AirPlayPersistence.loadTextureViewEnabled(this)) 1 else 0
         R.string.settings_media_stream -> AirPlayPersistence.loadMediaAudioChannel(this)
         R.string.settings_nav_stream -> AirPlayPersistence.loadNavigationAudioChannel(this)
-        R.string.settings_call_mode -> AirPlayPersistence.loadCallMode(this).coerceIn(0, 1)
         else -> error("未绑定的设置项")
     }
 
@@ -347,10 +345,6 @@ class SettingsActivity : Activity() {
             R.string.settings_video_output -> AirPlayPersistence.saveTextureViewEnabled(this, index == 1)
             R.string.settings_media_stream -> AirPlayPersistence.saveMediaAudioChannel(this, index)
             R.string.settings_nav_stream -> AirPlayPersistence.saveNavigationAudioChannel(this, index)
-            R.string.settings_call_mode -> {
-                AirPlayPersistence.saveCallMode(this, index)
-                AirPlayPersistence.saveCarMicrophoneEnabled(this, index == 1)
-            }
             else -> error("未绑定的设置项")
         }
     }

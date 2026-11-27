@@ -248,9 +248,7 @@ object CarPlaySessionManager {
                     AirPlayPersistence.saveUiScalePercent(app, 100)
                     deliver(token) { appendLog("车机使用原生画布, 较小界面缩放已恢复默认值") }
                 }
-                val useCarMicrophone = AirPlayPersistence.loadCallMode(app) == 1
-                com.shilapi.xcertplay.media.MicOwnerReleaser.enabled = useCarMicrophone
-                if (useCarMicrophone) com.shilapi.xcertplay.media.MicOwnerReleaser.selfHeal()
+                com.shilapi.xcertplay.media.MicOwnerReleaser.enabled = false
                 val microphone = ContextCompat.checkSelfPermission(app, Manifest.permission.RECORD_AUDIO) ==
                     PackageManager.PERMISSION_GRANTED
                 deliver(token) { appendLog("音频能力: 麦克风可用=$microphone") }

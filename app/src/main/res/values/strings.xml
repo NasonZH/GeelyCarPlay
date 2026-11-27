@@ -134,8 +134,6 @@
     <string name="settings_geely_bluetooth_desc">使用 H52 原厂蓝牙读取配对设备并建立 iAP2 连接</string>
     <string name="settings_geely_audio">吉利 H52 音频路由</string>
     <string name="settings_geely_audio_desc">音乐和导航使用车机专用音频通道</string>
-    <string name="settings_call_mode">通话方式</string>
-    <string name="settings_call_mode_desc">车机麦克风模式需要 Root，通话期间会暂停原厂语音服务</string>
     <string name="hotspot_manual_title">填写热点信息</string>
     <string name="hotspot_manual_help">先在手机系统设置中开启热点，填写相同的名称和密码。此处只保存连接信息，不修改系统热点。</string>
     <string name="hotspot_name_hint">与系统热点名称完全一致</string>
