@@ -5,9 +5,11 @@ import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.View
 import android.widget.TextView
 import com.geely.carplay.ui.widget.LoadingTrackView
+import com.shilapi.xcertplay.AirPlayPersistence
 
 /**
  * 启动页：环境检测动画结束后进入首页
@@ -33,6 +35,7 @@ class SplashActivity : Activity() {
         setContentView(R.layout.activity_splash)
 
         playEntrance()
+        prepareHotspot()
         findViewById<LoadingTrackView>(R.id.splash_progress).animateProgress(SPLASH_DURATION_MS)
         handler.postDelayed(markReady, SPLASH_DURATION_MS - READY_LEAD_MS)
         handler.postDelayed(enterHome, SPLASH_DURATION_MS)
@@ -42,6 +45,21 @@ class SplashActivity : Activity() {
         handler.removeCallbacks(enterHome)
         handler.removeCallbacks(markReady)
         super.onDestroy()
+    }
+
+    /** 启动页后台准备热点 车机热点与 Wi-Fi 客户端互斥 */
+    private fun prepareHotspot() {
+        val appContext = applicationContext
+        Thread({
+            runCatching {
+                if (!AirPlayPersistence.loadWirelessEnabled(appContext)) return@runCatching
+                HotspotSettings.prepare(appContext) { message ->
+                    Log.i("GeelyCarPlay", "启动热点: $message")
+                }
+            }.onFailure {
+                Log.w("GeelyCarPlay", "启动热点失败: ${it.message}")
+            }
+        }, "carplay-splash-hotspot").start()
     }
 
     private fun playEntrance() {

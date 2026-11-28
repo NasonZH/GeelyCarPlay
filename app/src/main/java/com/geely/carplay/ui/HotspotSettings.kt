@@ -57,6 +57,8 @@ internal object HotspotSettings {
                 check(result is CarHotspotReadResult.Available) {
                     "请先在系统设置中开启热点, 再返回应用连接"
                 }
+                // 车机 Wi-Fi 客户端与热点互斥 启动热点前先关闭无线
+                WirelessSetup.disableWifiClient(context, report)
                 val started = CarHotspotTools.start(context)
                 if (started is CarHotspotStartResult.Failure) {
                     report(failureMessage(started.reason))
