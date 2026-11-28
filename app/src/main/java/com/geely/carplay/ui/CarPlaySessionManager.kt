@@ -1,6 +1,8 @@
 package com.geely.carplay.ui
 
 import android.Manifest
+import android.app.Activity
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -46,7 +48,13 @@ object CarPlaySessionManager {
     /** 连接后多久内自动暂停手机续播的音乐 超过这个时间视为用户主动播放 */
     private const val AUTO_PAUSE_WINDOW_MILLIS = 15_000L
     /** 一次通话内最多尝试拉回投屏页的次数 */
-    private const val MAX_CALL_BRING_ATTEMPTS = 5
+    private const val MAX_CALL_MINIMIZE_ATTEMPTS = 6
+    // 车机通话界面 com.ecarx.btphone 的“最小化”按钮中心坐标（1920x720）
+    private const val CALL_MINIMIZE_X = 131
+    private const val CALL_MINIMIZE_Y = 49
+    private const val CALL_MINIMIZE_FIRST_DELAY_MILLIS = 2_000L
+    private const val CALL_MINIMIZE_RETRY_DELAY_MILLIS = 1_200L
+    private const val CAR_CALL_UI_PACKAGE = "com.ecarx.btphone"
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
     private var mfiPreloadScheduled = false
@@ -68,7 +76,10 @@ object CarPlaySessionManager {
     /** 当前投屏页是否在前台 由 CarPlayActivity 生命周期更新 */
     @Volatile private var screenResumed = false
     private var lastAudioMode = -1
-    private var callBringAttempts = 0
+    /** 本次通话已尝试点击最小化的次数 */
+    private var callMinimizeAttempts = 0
+    /** 通话结束后要恢复的页面 取通话开始前最后处于前台的页面 */
+    private var callReturnScreen: Class<out Activity>? = null
     @Volatile private var timingSignalMissingLogged = false
     /** /proc/net/snmp 可读性 读取被系统拒绝后不再每 5 秒重试 */
     private var tcpRetransReadable: Boolean? = null
@@ -279,8 +290,8 @@ object CarPlaySessionManager {
                     navigationStreamType = AirPlayPersistence.loadNavigationStreamType(app),
                     mediaBufferMillis = AirPlayPersistence.loadMediaBufferMillis(app),
                     onAudioDiagnostic = { message -> deliver(token) { appendLog(message) } },
-                    onVideoSurfaceFrameRendered = { renderedSurface -> deliver(token) {
-                        if (surface === renderedSurface) {
+                    onVideoSurfaceFrameRendered = { _ -> deliver(token) {
+                        if (surface != null) {
                             surfaceFrameRendered = true
                             changed()
                         }
@@ -424,6 +435,8 @@ object CarPlaySessionManager {
         }
         linkWatchdog = watchdog
         callActive = false
+        callMinimizeAttempts = 0
+        callReturnScreen = null
         watchdog.scheduleWithFixedDelay(
             { runCatching { checkWirelessLink(app, token) } },
             LINK_CHECK_INTERVAL_MILLIS,
@@ -458,37 +471,78 @@ object CarPlaySessionManager {
         main.post { finishLostLink(token, app, silentMillis) }
     }
 
-    /** 通话开始时把投屏页拉回前台 车机通话界面退到后面 通话本身不受影响 */
+    /** 车机通话界面出现时自动点“最小化” 并恢复通话前的页面 */
     private fun checkCallState(app: Context, token: Int) {
         if (generation != token || !isRunning) {
             callActive = false
-            callBringAttempts = 0
+            callMinimizeAttempts = 0
+            callReturnScreen = null
             return
         }
-        val audio = app.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
-        val mode = audio.mode
-        val inCall = mode == AudioManager.MODE_IN_CALL ||
-            mode == AudioManager.MODE_IN_COMMUNICATION
-        if (mode != lastAudioMode) {
-            lastAudioMode = mode
-            appendLog("通话状态: mode=$mode inCall=$inCall connected=$isConnected screenResumed=$screenResumed")
+        val audio = app.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        if (audio != null && audio.mode != lastAudioMode) {
+            lastAudioMode = audio.mode
+            appendLog("通话状态: mode=${audio.mode} connected=$isConnected")
         }
-        if (!inCall || !isConnected || isExiting) {
+        val callUiVisible = topPackage(app) == CAR_CALL_UI_PACKAGE
+        if (!callUiVisible) {
             callActive = false
-            callBringAttempts = 0
+            callMinimizeAttempts = 0
+            callReturnScreen = null
             return
         }
+        if (!isConnected || isExiting || callActive) return
         callActive = true
-        if (screenResumed) return
-        if (callBringAttempts >= MAX_CALL_BRING_ATTEMPTS) return
-        callBringAttempts++
-        bringCarPlayToFront(app, token)
+        callMinimizeAttempts = 0
+        callReturnScreen = ForegroundScreens.current ?: CarPlayActivity::class.java
+        appendLog("通话小窗: 通话前页面 ${callReturnScreen?.simpleName}")
+        scheduleCallMinimize(app, token, 1)
     }
 
-    private fun bringCarPlayToFront(app: Context, token: Int) {
+    /** 只在车机通话界面位于前台时点击 避免过早点击落到其它界面 */
+    private fun scheduleCallMinimize(app: Context, token: Int, attempt: Int) {
+        val delay = if (attempt == 1) {
+            CALL_MINIMIZE_FIRST_DELAY_MILLIS
+        } else {
+            CALL_MINIMIZE_RETRY_DELAY_MILLIS
+        }
+        main.postDelayed({
+            if (generation != token || !isRunning || !isConnected || isExiting) return@postDelayed
+            worker.execute {
+                val top = topPackage(app)
+                if (top == CAR_CALL_UI_PACKAGE) {
+                    if (attempt > MAX_CALL_MINIMIZE_ATTEMPTS) {
+                        appendLog("通话小窗: 连续$MAX_CALL_MINIMIZE_ATTEMPTS 次点击仍未离开通话界面")
+                        return@execute
+                    }
+                    callMinimizeAttempts = attempt
+                    val exit = runCatching {
+                        Runtime.getRuntime().exec(
+                            arrayOf("su", "-c", "input tap $CALL_MINIMIZE_X $CALL_MINIMIZE_Y"),
+                        ).waitFor()
+                    }.getOrNull()
+                    appendLog("通话小窗: 第${attempt}次点击 top=$top exit=$exit")
+                    scheduleCallMinimize(app, token, attempt + 1)
+                } else {
+                    appendLog("通话小窗: 已离开通话界面 top=$top")
+                    val backSent = pressCarPlayBack()
+                    appendLog("通话小窗: 退出 CarPlay 通话页 sent=$backSent")
+                    restoreCallScreen(app, token)
+                }
+            }
+        }, delay)
+    }
+
+    /** 通话界面已最小化 回到通话开始前的页面 */
+    private fun restoreCallScreen(app: Context, token: Int) {
         main.post {
-            if (generation != token || !isConnected || isExiting) return@post
-            val intent = Intent(app, CarPlayActivity::class.java).apply {
+            if (generation != token || !isRunning || !isConnected || isExiting) return@post
+            val target = callReturnScreen ?: CarPlayActivity::class.java
+            if (ForegroundScreens.current == target && screenResumed) {
+                appendLog("通话小窗: 已在通话前页面 ${target.simpleName}")
+                return@post
+            }
+            val intent = Intent(app, target).apply {
                 addFlags(
                     Intent.FLAG_ACTIVITY_NEW_TASK or
                         Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
@@ -496,9 +550,19 @@ object CarPlaySessionManager {
                 )
             }
             val result = runCatching { app.startActivity(intent) }
-            appendLog("通话中拉回投屏 attempt=$callBringAttempts success=${result.isSuccess}")
+            appendLog("通话小窗: 恢复页面 ${target.simpleName} success=${result.isSuccess}")
         }
     }
+
+    /** 让 iPhone 退出 CarPlay 通话页面 回到通话前的投屏内容 */
+    fun pressCarPlayBack(): Boolean =
+        controller?.sendKnob(AirPlayKnobState(back = true)) ?: false
+
+    /** 当前前台包名 用于确认车机通话界面已出现 */
+    private fun topPackage(app: Context): String? = runCatching {
+        val manager = app.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+        manager?.getRunningTasks(1)?.firstOrNull()?.topActivity?.packageName
+    }.getOrNull()
 
     /** 投屏页前后台状态 用于避免重复拉起同一个页面 */
     fun noteScreenResumed(resumed: Boolean) {

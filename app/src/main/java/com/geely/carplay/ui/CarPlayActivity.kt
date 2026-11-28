@@ -30,6 +30,15 @@ class CarPlayActivity : Activity() {
     /** 只接管已成功入队的按键配对 避免长按重复发送或松开事件落到原播放器 */
     private val handledMediaKeys = mutableSetOf<Int>()
     private val observer: () -> Unit = { onSessionChanged() }
+    private val statusHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    /** 等待画面时定时自检 首帧到达后隐藏提示 */
+    private val statusTick = object : Runnable {
+        override fun run() {
+            if (isFinishing || isDestroyed) return
+            renderStatus()
+            if (!frameAvailable) statusHandler.postDelayed(this, 500)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         ThemeStore.load(this)
@@ -61,9 +70,12 @@ class CarPlayActivity : Activity() {
             return
         }
         CarPlaySessionManager.observe(observer)
+        statusHandler.removeCallbacks(statusTick)
+        statusHandler.postDelayed(statusTick, 500)
     }
 
     override fun onPause() {
+        statusHandler.removeCallbacks(statusTick)
         handledMediaKeys.clear()
         CarPlaySessionManager.noteScreenResumed(false)
         CarPlaySessionManager.removeObserver(observer)

@@ -25,6 +25,7 @@ import com.shilapi.xcertplay.airplay.AirPlayConfig
 import com.shilapi.xcertplay.airplay.AirPlayContact
 import com.shilapi.xcertplay.airplay.AirPlayDeviceInfo
 import com.shilapi.xcertplay.airplay.AirPlayIdentity
+import com.shilapi.xcertplay.airplay.AirPlayKnobState
 import com.shilapi.xcertplay.airplay.AirPlayMediaHandler
 import com.shilapi.xcertplay.airplay.AirPlaySession
 import com.shilapi.xcertplay.airplay.AirPlaySessionListener
@@ -441,6 +442,9 @@ class CarPlayController(
 
     /** Sends one CarPlay media-button press. */
     fun sendMediaButton(index: Int): Boolean = enqueueInput { session, _ -> session.sendMedia(index) }
+
+    /** Sends one CarPlay knob/consumer-control press (home/back/select). */
+    fun sendKnob(state: AirPlayKnobState): Boolean = enqueueInput { session, _ -> session.sendKnob(state) }
 
     private fun enqueueInput(send: (AirPlaySession, Long) -> Unit): Boolean = synchronized(inputLock) {
         if (closed) return false
