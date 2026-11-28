@@ -10,7 +10,7 @@
 | [排障手册](docs/troubleshooting.md) | 热点、蓝牙、音频、黑屏和退出故障 |
 | [移植记录](docs/carplay-migration.md) | 来源、源码差异、认证和验收边界 |
 
-截至 2026-11-26：当前为 v1.1.0（versionName 1.1.0，versionCode 4，包名 `com.carplay`，应用名 CarPlay），安装包统一命名为 `CarPlay.apk`。本轮连接流程与媒体按键变更见 [v1.1.0 更新说明](docs/release-notes-v1.1.0.md)，实车切歌效果仍待验收。音乐电流声与主动断开后的残留播放已在实机确认消除；来电自动切换手机蓝牙通话；此前首页布局、连接前检查、不依赖蓝牙的断开检测与音乐缓冲档位已在小米 MI6 上验收；车机上完成了视频帧池化、5GHz 信道 149 + 802.11n + WMM 与设备在线判断的实机验证。
+截至 2026-11-28：当前为 v1.1.1（versionName 1.1.1，versionCode 5，包名 `com.carplay`，应用名 CarPlay），安装包统一命名为 `CarPlay.apk`。本版新增原生 ChaCha20-Poly1305 解密、通话界面自动缩小与恢复、音量键与断连播放修复，详见 [v1.1.1 更新说明](docs/release-notes-v1.1.1.md)。音乐电流声与主动断开后的残留播放已在实机确认消除；来电自动切换手机蓝牙通话；此前首页布局、连接前检查、不依赖蓝牙的断开检测与音乐缓冲档位已在小米 MI6 上验收；车机上完成了视频帧池化、5GHz 信道 149 + 802.11n + WMM 与设备在线判断的实机验证。
 
 ## 功能特性
 
@@ -63,7 +63,7 @@ applicationId 为 `com.carplay`，Kotlin 包名与 namespace 仍为 `com.geely.c
 ./gradlew :app:assembleDebug --offline --console=plain
 ```
 
-APK：`app/build/outputs/apk/debug/CarPlay.apk`（当前 v1.1.0）。仓库**不包含** Apple MFi 认证资产，构建前需自备 `app/src/main/assets/offline-mfi/identity.pk8` 与 `certificate.p7b`；缺少时仍可编译，但本地 MFi 认证不可用。GitHub Releases 提供预构建安装包。
+APK：`app/build/outputs/apk/debug/CarPlay.apk`（当前 v1.1.1）。仓库**不包含** Apple MFi 认证资产，构建前需自备 `app/src/main/assets/offline-mfi/identity.pk8` 与 `certificate.p7b`；缺少时仍可编译，但本地 MFi 认证不可用。GitHub Releases 提供预构建安装包。
 
 ## 使用指南
 
