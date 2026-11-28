@@ -6,7 +6,7 @@ plugins {
 }
 
 // 应用版本用于展示和发布记录
-val appVersionName = "1.1.1"
+val appVersionName = "1.1.2"
 
 // Release 签名材料放在本地 keystore.properties，不进入仓库
 val keystorePropertiesFile = rootProject.file("keystore.properties")
@@ -25,7 +25,7 @@ android {
         minSdk = 18
         targetSdk = 18
         multiDexEnabled = true
-        versionCode = 5
+        versionCode = 6
         versionName = appVersionName
     }
 

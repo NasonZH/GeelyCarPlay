@@ -11,6 +11,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import android.provider.Settings
@@ -103,6 +104,12 @@ class SettingsActivity : Activity() {
                 SettingsItem.Toggle(R.string.settings_geely_audio, R.string.settings_geely_audio_desc),
                 SettingsItem.Toggle(R.string.settings_audio_focus, R.string.settings_audio_focus_desc),
                 SettingsItem.Toggle(R.string.settings_advanced_audio, R.string.settings_advanced_audio_desc),
+                SettingsItem.Slider(
+                    R.string.settings_nav_duck,
+                    R.string.settings_nav_duck_desc,
+                    10,
+                    100,
+                ),
                 SettingsItem.Choice(
                     R.string.settings_media_stream,
                     R.string.settings_media_stream_desc,
@@ -225,6 +232,36 @@ class SettingsActivity : Activity() {
                         }.setNegativeButton("取消", null).show()
                 }
             }
+            is SettingsItem.Slider -> {
+                val value = loadSlider(item.titleResId).coerceIn(item.min, item.max)
+                row.bindChoice(item.titleResId, item.descResId, "$value%") {
+                    val dialogView = layoutInflater.inflate(R.layout.dialog_percent_slider, null)
+                    val seek = dialogView.findViewById<SeekBar>(R.id.percent_seek)
+                    val percentText = dialogView.findViewById<TextView>(R.id.percent_value)
+                    seek.max = item.max - item.min
+                    seek.progress = value - item.min
+                    percentText.text = "$value%"
+                    seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                        override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
+                            percentText.text = "${progress + item.min}%"
+                        }
+
+                        override fun onStartTrackingTouch(bar: SeekBar?) = Unit
+                        override fun onStopTrackingTouch(bar: SeekBar?) = Unit
+                    })
+                    AlertDialog.Builder(this)
+                        .setTitle(item.titleResId)
+                        .setView(dialogView)
+                        .setPositiveButton("确定") { _, _ ->
+                            val selected = (seek.progress + item.min).coerceIn(item.min, item.max)
+                            saveSlider(item.titleResId, selected)
+                            row.updateValue("$selected%")
+                            showReconnectHint()
+                        }
+                        .setNegativeButton("取消", null)
+                        .show()
+                }
+            }
         }
         return row
     }
@@ -319,6 +356,18 @@ class SettingsActivity : Activity() {
                 com.shilapi.xcertplay.diagnostics.DiagnosticLog.verbose = value
             }
             else -> error("未绑定的设置项")
+        }
+    }
+
+    private fun loadSlider(title: Int): Int = when (title) {
+        R.string.settings_nav_duck -> AirPlayPersistence.loadNavigationDuckPercent(this)
+        else -> error("未绑定的滑杆设置项")
+    }
+
+    private fun saveSlider(title: Int, value: Int) {
+        when (title) {
+            R.string.settings_nav_duck -> AirPlayPersistence.saveNavigationDuckPercent(this, value)
+            else -> error("未绑定的滑杆设置项")
         }
     }
 
@@ -481,6 +530,12 @@ class SettingsActivity : Activity() {
             val valueArrayResId: Int,
             ) : SettingsItem()
         class Link(val titleResId: Int, val descResId: Int, val action: LinkAction) : SettingsItem()
+    class Slider(
+        val titleResId: Int,
+        val descResId: Int,
+        val min: Int,
+        val max: Int,
+    ) : SettingsItem()
     }
 
     private class SettingsGroup(val titleResId: Int, val icon: IconView.Icon, val items: List<SettingsItem>)

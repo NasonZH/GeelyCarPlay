@@ -267,7 +267,7 @@ object CarPlaySessionManager {
                         modelIdentifier = "GKUI",
                         manufacturer = "车机",
                         serialNumber = "GEELY-" + deviceId.replace(":", ""),
-                        firmwareVersion = "1.1.1",
+                        firmwareVersion = "1.1.2",
                         hardwareVersion = "1.0",
                         carPlayUsbInterfaceNumber = 3,
                         locationInformationEnabled = locationEnabled,
@@ -337,6 +337,7 @@ object CarPlaySessionManager {
                     context = app,
                     navigationStreamType = AirPlayPersistence.loadNavigationStreamType(app),
                     mediaBufferMillis = AirPlayPersistence.loadMediaBufferMillis(app),
+                    navigationDuckVolume = AirPlayPersistence.loadNavigationDuckPercent(app) / 100f,
                     onAudioDiagnostic = { message -> deliver(token) { appendLog(message) } },
                     onVideoSurfaceFrameRendered = { _ -> deliver(token) {
                         if (surface != null) {

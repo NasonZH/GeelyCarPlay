@@ -40,6 +40,7 @@ object AirPlayPersistence {
     private const val KEY_ADVANCED_AUDIO_CHANNEL_MAPPING = "advanced_audio_channel_mapping"
     private const val KEY_AUDIO_FOCUS_ENABLED = "audio_focus_enabled"
     private const val KEY_MINIMIZE_CAR_CALL = "minimize_car_call"
+    private const val KEY_NAVIGATION_DUCK_PERCENT = "navigation_duck_percent"
     private const val KEY_GEELY_BLUETOOTH_CONNECTION_ENABLED = "geely_h52_bluetooth_connection_enabled"
     private const val KEY_MEDIA_AUDIO_CHANNEL = "media_audio_channel"
     private const val KEY_NAVIGATION_AUDIO_CHANNEL = "navigation_audio_channel"
@@ -156,6 +157,18 @@ object AirPlayPersistence {
     fun saveMinimizeCarCall(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putBoolean(KEY_MINIMIZE_CAR_CALL, enabled)
+            .apply()
+    }
+
+    /** 导航播报时媒体音量比例 10..100 默认 70 */
+    fun loadNavigationDuckPercent(context: Context): Int =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getInt(KEY_NAVIGATION_DUCK_PERCENT, 70)
+            .coerceIn(10, 100)
+
+    fun saveNavigationDuckPercent(context: Context, percent: Int) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putInt(KEY_NAVIGATION_DUCK_PERCENT, percent.coerceIn(10, 100))
             .apply()
     }
 

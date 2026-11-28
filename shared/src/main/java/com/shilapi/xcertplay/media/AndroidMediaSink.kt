@@ -48,6 +48,8 @@ internal class AudioFocusCoordinator(
     private val enabled: Boolean,
     private val report: (String) -> Unit = {},
     private val separateGeelyFocus: Boolean = false,
+    /** 导航播报时媒体音量比例 0.1..1.0 */
+    private val duckVolume: Float = 0.7f,
 ) {
     // AudioAttributes/AudioFocusRequest are absent on Android 4.3; keep them as Any and reflect.
     private data class Entry(val channel: AudioChannel, val attributes: Any)
@@ -77,7 +79,7 @@ internal class AudioFocusCoordinator(
         synchronized(this) {
             runCatching { report("Audio: focus change=$change activeTracks=${active.size}") }
             when (change) {
-                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> setVolume(DUCKED_VOLUME)
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> setVolume(duckVolume)
                 AudioManager.AUDIOFOCUS_GAIN -> setVolume(FULL_VOLUME)
                 // Keep CarPlay audio running on permanent or transient loss. Some head units
                 // do not send a later gain callback after taking focus back.
@@ -115,7 +117,7 @@ internal class AudioFocusCoordinator(
     private fun applyTrackVolume(track: AudioTrack) {
         val state = trackVolumes[track] ?: return
         val navigationVolume = if (state.channel == AudioChannel.MEDIA && playingNavigationTracks.isNotEmpty()) {
-            DUCKED_VOLUME
+            duckVolume
         } else {
             FULL_VOLUME
         }
@@ -241,7 +243,7 @@ internal class AudioFocusCoordinator(
         lease.callbackVersion.incrementAndGet()
         val volume = when (change) {
             AudioManager.AUDIOFOCUS_GAIN -> FULL_VOLUME
-            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> DUCKED_VOLUME
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> duckVolume
             // 永久丢失焦点时媒体通道保持可听 该车机的蓝牙音乐应用会长期持有焦点
             AudioManager.AUDIOFOCUS_LOSS ->
                 if (key.channel == AudioChannel.MEDIA) FULL_VOLUME else MUTED_VOLUME
@@ -363,7 +365,6 @@ internal class AudioFocusCoordinator(
     private companion object {
         const val TAG = "DiPlay-AudioFocus"
         const val FULL_VOLUME = 1f
-        const val DUCKED_VOLUME = 0.2f
         const val MUTED_VOLUME = 0f
     }
 }
@@ -390,6 +391,7 @@ class AndroidMediaSink(
     private val navigationStreamType: Int = AudioChannelMapper.DEFAULT_NAVIGATION_STREAM_TYPE,
     onScreenStreamActiveChanged: ((Int, Boolean) -> Unit)? = null,
     private val mediaBufferMillis: Int = MediaAudioBuffer.DEFAULT_MILLIS,
+    private val navigationDuckVolume: Float = 0.7f,
     private val onAudioDiagnostic: (String) -> Unit = {},
     /** True while any music ("media") audio stream is running; called from media threads. */
     private val onMediaAudioChanged: (Boolean) -> Unit = {},
@@ -405,6 +407,7 @@ class AndroidMediaSink(
         audioFocusEnabled || geelyAudio != null,
         onAudioDiagnostic,
         separateGeelyFocus = geelyAudio != null,
+        duckVolume = navigationDuckVolume,
     )
     private val screenStateLock = Any()
     private val activeScreenTypes = mutableSetOf<Int>()

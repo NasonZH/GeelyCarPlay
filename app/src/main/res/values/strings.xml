@@ -79,6 +79,8 @@
     <string name="settings_boot_start_desc">是否可用取决于车机的启动设置。</string>
     <string name="settings_minimize_car_call">自动缩小车机通话</string>
     <string name="settings_minimize_car_call_desc">通话接通后自动最小化车机通话界面并回到通话前页面。</string>
+    <string name="settings_nav_duck">导航时媒体音量</string>
+    <string name="settings_nav_duck_desc">导航播报时媒体音量降到该比例，范围 10–100%。</string>
     <string name="settings_hotspot">热点信息</string>
     <string name="settings_hotspot_desc">无线连接使用，可自动读取或手动填写。</string>
     <string name="settings_hotspot_saved">已配置：%1$s</string>
@@ -127,7 +129,7 @@
     <string name="settings_save_report_desc">报告不会自动发送，不包含协议数据和凭据。</string>
 
     <string name="settings_version">版本</string>
-    <string name="settings_version_value">1.1.1</string>
+    <string name="settings_version_value">1.1.2</string>
     <string name="settings_device">车机</string>
     <string name="settings_device_value">GKUI 1.2 · Android 4.3 · 1920×720</string>
     <string name="settings_licenses">开源许可</string>
