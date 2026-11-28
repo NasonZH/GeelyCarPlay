@@ -7,6 +7,12 @@ LOCAL_CFLAGS := -Wall -Wextra -Werror
 include $(BUILD_SHARED_LIBRARY)
 
 include $(CLEAR_VARS)
+LOCAL_MODULE := diplay_crypto
+LOCAL_SRC_FILES := chacha20poly1305.c chacha20_jni.c
+LOCAL_CFLAGS := -O3 -Wall -Wextra -Werror
+include $(BUILD_SHARED_LIBRARY)
+
+include $(CLEAR_VARS)
 LOCAL_MODULE := legacy_usb_compat
 LOCAL_SRC_FILES := legacy_usb_jni.c
 LOCAL_CFLAGS := -Wall -Wextra -Werror

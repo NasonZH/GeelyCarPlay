@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay.airplay
 
+import android.util.Log
 import org.bouncycastle.crypto.Digest
 import org.bouncycastle.crypto.digests.SHA512Digest
 import org.bouncycastle.crypto.generators.HKDFBytesGenerator
@@ -16,10 +17,24 @@ import java.security.SecureRandom
 
 /** BouncyCastle-backed primitives for the CarPlay pairing and control channel. */
 object AirPlayCrypto {
+    private const val TAG = "GeelyCarPlay"
     private const val MAC_BITS = 128
     const val NONCE_SIZE = 12
     private const val LABEL_SIZE = 8
     private val random = SecureRandom()
+
+    /** 原生实现对不可用或自检失败时回退 BouncyCastle */
+    private val nativeReady: Boolean = if (!NativeChaCha20Poly1305.isAvailable) {
+        false
+    } else {
+        runCatching { nativeSelfCheck() }.getOrDefault(false)
+    }
+
+    init {
+        if (NativeChaCha20Poly1305.isAvailable) {
+            Log.i(TAG, "原生 ChaCha20-Poly1305 自检: ${if (nativeReady) "通过" else "失败, 回退 BouncyCastle"}")
+        }
+    }
 
     data class X25519KeyPair(val privateKey: ByteArray, val publicKey: ByteArray)
     data class Ed25519KeyPair(val privateKey: ByteArray, val publicKey: ByteArray)
@@ -136,7 +151,8 @@ object AirPlayCrypto {
 
     /** 每条接收流独占实例 每个报文重新初始化 nonce 和认证状态 */
     internal class StreamDecryptor(key: ByteArray) {
-        private val key = KeyParameter(key)
+        private val keyBytes = key.copyOf()
+        private val key = KeyParameter(keyBytes)
         private val cipher = ChaCha20Poly1305()
 
         fun openInto(
@@ -148,12 +164,38 @@ object AirPlayCrypto {
             output: ByteArray,
             outputOffset: Int,
         ): Int {
+            if (nativeReady) {
+                val result = NativeChaCha20Poly1305.open(
+                    keyBytes, nonce, aad, ciphertextAndTag,
+                    ciphertextOffset, ciphertextLength, output, outputOffset,
+                )
+                if (result >= 0) return result
+            }
             cipher.init(false, AEADParameters(key, MAC_BITS, nonce, aad))
             val processed = cipher.processBytes(
                 ciphertextAndTag, ciphertextOffset, ciphertextLength, output, outputOffset,
             )
             return processed + cipher.doFinal(output, outputOffset + processed)
         }
+    }
+
+    /** 用同一个向量交叉校验原生实现与 BouncyCastle 的加密和解密结果 */
+    private fun nativeSelfCheck(): Boolean {
+        val key = ByteArray(32) { (it * 7 + 3).toByte() }
+        val nonce = ByteArray(NONCE_SIZE) { (it * 11 + 5).toByte() }
+        val aad = ByteArray(13) { (it + 1).toByte() }
+        val plaintext = ByteArray(1024) { (it * 31).toByte() }
+        val sealed = chachaSeal(key, nonce, plaintext, aad)
+        val opened = ByteArray(plaintext.size)
+        val openedLength = NativeChaCha20Poly1305.open(
+            key, nonce, aad, sealed, 0, sealed.size, opened, 0,
+        )
+        if (openedLength != plaintext.size || !opened.contentEquals(plaintext)) return false
+        val sealedNative = ByteArray(plaintext.size + 16)
+        val sealedLength = NativeChaCha20Poly1305.seal(
+            key, nonce, aad, plaintext, 0, plaintext.size, sealedNative, 0,
+        )
+        return sealedLength == sealed.size && sealedNative.contentEquals(sealed)
     }
 
     /** 12-byte nonce: four zero bytes followed by an eight-byte little-endian counter. */
