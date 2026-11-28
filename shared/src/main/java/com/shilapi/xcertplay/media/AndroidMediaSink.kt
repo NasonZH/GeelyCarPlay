@@ -126,7 +126,8 @@ internal class AudioFocusCoordinator(
     @Synchronized
     fun acquire(track: AudioTrack, channel: AudioChannel, attributes: Any?, legacyStreamType: Int) {
         if (separateGeelyFocus) {
-            acquireGeely(track, channel, legacyStreamType)
+            // 导航轨道只在真正播放时申请焦点 避免空闲导航流长期占用音量键
+            if (channel != AudioChannel.NAVIGATION) acquireGeely(track, channel, legacyStreamType)
             return
         }
         if (!enabled || manager == null || channel == AudioChannel.NAVIGATION) return
@@ -139,7 +140,8 @@ internal class AudioFocusCoordinator(
     @Synchronized
     fun acquireLegacy(track: AudioTrack, channel: AudioChannel, streamType: Int) {
         if (separateGeelyFocus) {
-            acquireGeely(track, channel, streamType)
+            // 导航焦点延迟到 navigationStarted 再申请
+            if (channel != AudioChannel.NAVIGATION) acquireGeely(track, channel, streamType)
             return
         }
         if (!enabled || channel == AudioChannel.NAVIGATION) return

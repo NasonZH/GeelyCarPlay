@@ -39,6 +39,7 @@ object AirPlayPersistence {
     private const val KEY_HEVC_SOFTWARE_DECODER = "hevc_software_decoder"
     private const val KEY_ADVANCED_AUDIO_CHANNEL_MAPPING = "advanced_audio_channel_mapping"
     private const val KEY_AUDIO_FOCUS_ENABLED = "audio_focus_enabled"
+    private const val KEY_MINIMIZE_CAR_CALL = "minimize_car_call"
     private const val KEY_GEELY_BLUETOOTH_CONNECTION_ENABLED = "geely_h52_bluetooth_connection_enabled"
     private const val KEY_MEDIA_AUDIO_CHANNEL = "media_audio_channel"
     private const val KEY_NAVIGATION_AUDIO_CHANNEL = "navigation_audio_channel"
@@ -146,6 +147,17 @@ object AirPlayPersistence {
     fun loadAudioFocusEnabled(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getBoolean(KEY_AUDIO_FOCUS_ENABLED, false)
+
+    /** 通话接通后是否自动缩小车机通话界面 默认开启 */
+    fun loadMinimizeCarCall(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_MINIMIZE_CAR_CALL, true)
+
+    fun saveMinimizeCarCall(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean(KEY_MINIMIZE_CAR_CALL, enabled)
+            .apply()
+    }
 
     /**
      * Bluetooth-audio mode: CarPlay stays video-only so the iPhone routes media and calls to the

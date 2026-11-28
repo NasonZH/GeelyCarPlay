@@ -53,6 +53,10 @@ class SettingsActivity : Activity() {
             listOf(
                 SettingsItem.Toggle(R.string.settings_auto_connect, R.string.settings_auto_connect_desc),
                 SettingsItem.Toggle(R.string.settings_boot_start, R.string.settings_boot_start_desc),
+                SettingsItem.Toggle(
+                    R.string.settings_minimize_car_call,
+                    R.string.settings_minimize_car_call_desc,
+                ),
                 SettingsItem.Link(R.string.settings_hotspot, R.string.settings_hotspot_desc, LinkAction.HOTSPOT),
                 SettingsItem.Toggle(R.string.settings_geely_bluetooth, R.string.settings_geely_bluetooth_desc),
             ),
@@ -284,6 +288,7 @@ class SettingsActivity : Activity() {
     private fun loadToggle(title: Int): Boolean = when (title) {
         R.string.settings_auto_connect -> DiPlayPreferences.autoConnect(this)
         R.string.settings_boot_start -> AirPlayPersistence.loadAutoStartOnBoot(this)
+        R.string.settings_minimize_car_call -> AirPlayPersistence.loadMinimizeCarCall(this)
         R.string.settings_hevc -> AirPlayPersistence.loadHevcEnabled(this)
         R.string.settings_right_hand_drive -> AirPlayPersistence.loadRightHandDrive(this)
         R.string.settings_fullscreen -> AirPlayPersistence.loadHideTopBar(this)
@@ -300,6 +305,7 @@ class SettingsActivity : Activity() {
         when (title) {
             R.string.settings_auto_connect -> DiPlayPreferences.saveAutoConnect(this, value)
             R.string.settings_boot_start -> AirPlayPersistence.saveAutoStartOnBoot(this, value)
+            R.string.settings_minimize_car_call -> AirPlayPersistence.saveMinimizeCarCall(this, value)
             R.string.settings_hevc -> AirPlayPersistence.saveHevcEnabled(this, value)
             R.string.settings_right_hand_drive -> AirPlayPersistence.saveRightHandDrive(this, value)
             R.string.settings_fullscreen -> AirPlayPersistence.saveHideTopBar(this, value)

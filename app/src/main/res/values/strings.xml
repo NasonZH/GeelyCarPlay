@@ -77,6 +77,8 @@
     <string name="settings_auto_connect_desc">打开应用时连接上次使用的 iPhone。</string>
     <string name="settings_boot_start">车机启动后打开</string>
     <string name="settings_boot_start_desc">是否可用取决于车机的启动设置。</string>
+    <string name="settings_minimize_car_call">自动缩小车机通话</string>
+    <string name="settings_minimize_car_call_desc">通话接通后自动最小化车机通话界面并回到通话前页面。</string>
     <string name="settings_hotspot">热点信息</string>
     <string name="settings_hotspot_desc">无线连接使用，可自动读取或手动填写。</string>
     <string name="settings_hotspot_saved">已配置：%1$s</string>

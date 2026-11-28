@@ -3,8 +3,10 @@ package com.geely.carplay.ui
 import android.Manifest
 import android.app.Activity
 import android.app.ActivityManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.net.TrafficStats
@@ -49,12 +51,18 @@ object CarPlaySessionManager {
     private const val AUTO_PAUSE_WINDOW_MILLIS = 15_000L
     /** 一次通话内最多尝试拉回投屏页的次数 */
     private const val MAX_CALL_MINIMIZE_ATTEMPTS = 6
+    private const val DISCONNECT_PAUSE_DELAY_MILLIS = 400L
     // 车机通话界面 com.ecarx.btphone 的“最小化”按钮中心坐标（1920x720）
     private const val CALL_MINIMIZE_X = 131
     private const val CALL_MINIMIZE_Y = 49
     private const val CALL_MINIMIZE_FIRST_DELAY_MILLIS = 2_000L
     private const val CALL_MINIMIZE_RETRY_DELAY_MILLIS = 1_200L
+    private const val CALL_MINIMIZE_FALLBACK_MILLIS = 15_000L
     private const val CAR_CALL_UI_PACKAGE = "com.ecarx.btphone"
+    private const val BT_ACTION_COMING = "com.ecarx.btphone.coming"
+    private const val BT_ACTION_CALL = "com.ecarx.btphone.call"
+    private const val BT_ACTION_ACTIVE = "com.ecarx.btphone.active"
+    private const val BT_ACTION_HANGUP = "com.ecarx.btphone.hangup"
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
     private var mfiPreloadScheduled = false
@@ -80,6 +88,31 @@ object CarPlaySessionManager {
     private var callMinimizeAttempts = 0
     /** 通话结束后要恢复的页面 取通话开始前最后处于前台的页面 */
     private var callReturnScreen: Class<out Activity>? = null
+    /** 车机通话是否已接通 由 btphone 广播更新 */
+    @Volatile private var callAnswered = false
+    /** 已安排延迟断开 避免重复触发 */
+    @Volatile private var disconnectScheduled = false
+    /** 通话界面首次出现的时刻 用于广播缺失时的兜底 */
+    private var callUiFirstSeenAt = 0L
+    private var callStateApp: Context? = null
+    private val callStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                BT_ACTION_ACTIVE -> {
+                    callAnswered = true
+                    appendLog("通话小窗: 通话已接通")
+                }
+                BT_ACTION_COMING, BT_ACTION_CALL -> {
+                    callAnswered = false
+                    appendLog("通话小窗: ${intent.action}")
+                }
+                BT_ACTION_HANGUP -> {
+                    callAnswered = false
+                    appendLog("通话小窗: 通话结束")
+                }
+            }
+        }
+    }
     @Volatile private var timingSignalMissingLogged = false
     /** /proc/net/snmp 可读性 读取被系统拒绝后不再每 5 秒重试 */
     private var tcpRetransReadable: Boolean? = null
@@ -136,6 +169,21 @@ object CarPlaySessionManager {
 
     fun disconnect(context: Context) {
         automaticConnectionAllowed = false
+        if (disconnectScheduled) return
+        val session = sessions.lastOrNull()
+        if (session != null && isConnected) {
+            // 先暂停手机音乐 避免断开后 iPhone 转到车机蓝牙继续播放
+            disconnectScheduled = true
+            commands.execute { session.sendMedia(CarPlayMediaButton.PAUSE) }
+            appendLog("断开前暂停手机音乐")
+            val app = context.applicationContext
+            main.postDelayed({
+                disconnectScheduled = false
+                stop()
+                app.stopService(Intent(app, CarPlaySessionService::class.java))
+            }, DISCONNECT_PAUSE_DELAY_MILLIS)
+            return
+        }
         stop()
         context.stopService(Intent(context, CarPlaySessionService::class.java))
     }
@@ -424,6 +472,7 @@ object CarPlaySessionManager {
      */
     private fun startLinkWatchdog(app: Context, token: Int) {
         stopLinkWatchdog()
+        registerCallStateReceiver(app)
         watchdogStartedAt = SystemClock.elapsedRealtime()
         timingSignalMissingLogged = false
         lastDiagAt = 0L
@@ -489,9 +538,22 @@ object CarPlaySessionManager {
             callActive = false
             callMinimizeAttempts = 0
             callReturnScreen = null
+            callUiFirstSeenAt = 0L
             return
         }
-        if (!isConnected || isExiting || callActive) return
+        if (!isConnected || isExiting) return
+        if (!AirPlayPersistence.loadMinimizeCarCall(app)) {
+            if (callActive) appendLog("通话小窗: 设置已关闭 不自动缩小")
+            callActive = false
+            callMinimizeAttempts = 0
+            callReturnScreen = null
+            return
+        }
+        val now = SystemClock.elapsedRealtime()
+        if (callUiFirstSeenAt == 0L) callUiFirstSeenAt = now
+        if (callActive) return
+        // 来电响铃阶段不缩小 等接通广播或超时兜底
+        if (!callAnswered && now - callUiFirstSeenAt < CALL_MINIMIZE_FALLBACK_MILLIS) return
         callActive = true
         callMinimizeAttempts = 0
         callReturnScreen = ForegroundScreens.current ?: CarPlayActivity::class.java
@@ -666,6 +728,29 @@ object CarPlaySessionManager {
     private fun stopLinkWatchdog() {
         linkWatchdog?.shutdownNow()
         linkWatchdog = null
+        unregisterCallStateReceiver()
+    }
+
+    private fun registerCallStateReceiver(app: Context) {
+        if (callStateApp != null) return
+        val filter = IntentFilter().apply {
+            addAction(BT_ACTION_COMING)
+            addAction(BT_ACTION_CALL)
+            addAction(BT_ACTION_ACTIVE)
+            addAction(BT_ACTION_HANGUP)
+        }
+        val registered = runCatching { app.applicationContext.registerReceiver(callStateReceiver, filter) }
+        if (registered.isSuccess) {
+            callStateApp = app.applicationContext
+        } else {
+            appendLog("通话小窗: 注册通话广播失败 ${registered.exceptionOrNull()?.message}")
+        }
+    }
+
+    private fun unregisterCallStateReceiver() {
+        val app = callStateApp ?: return
+        callStateApp = null
+        runCatching { app.unregisterReceiver(callStateReceiver) }
     }
 
     /** 只有会话真正建立才写入历史 供首页快速连接使用 */
